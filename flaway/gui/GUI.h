@@ -1,0 +1,23 @@
+#pragma once
+#include <cstdint>
+
+namespace GUI {
+    bool init();
+    bool render(int window_width, int window_height, const uint8_t* captured_frame = nullptr);
+    bool get_is_init();
+    bool needs_overlay();
+    bool is_keybind_waiting();
+    void cancel_keybind_capture();
+    void shutdown();
+
+    // Theme color accessors (shared with HUD / ESP rendering)
+    unsigned int accent_a();
+    unsigned int accent_b();
+    unsigned int sidebar_a();
+    unsigned int sidebar_b();
+    unsigned int text_primary();
+    unsigned int text_dim();
+    unsigned int text_faint();
+    unsigned int border_color();
+    unsigned int card_color();
+}

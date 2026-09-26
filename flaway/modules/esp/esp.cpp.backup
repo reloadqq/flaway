@@ -1,0 +1,842 @@
+#include "esp.h"
+#include "../../flaway.h"
+#include "../../globals/globals.h"
+#include "../../gui/GUI.h"
+#include "../nametag_hook/nametag_hook.h"
+#include <sdk/minecraft/minecraft.h>
+#include <sdk/minecraft/world/world.h>
+#include <sdk/minecraft/entity/entity.h>
+#include <sdk/minecraft/util/box.h>
+#include <sdk/classloader.h>
+#include <cmath>
+#include <cfloat>
+#include <vector>
+#include <mutex>
+#include <string>
+#include <cstring>
+#include <algorithm>
+#include <map>
+#include <chrono>
+#include <sdk/projection.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+static std::vector<esp_player_data> esp_players;
+static std::vector<esp_item_data> esp_items;
+static esp_camera_data esp_cam;
+static std::mutex esp_mutex;
+static jobject g_last_world = nullptr;
+
+// Smoothed player positions for ESP interpolation
+static std::map<int, esp_player_data> g_smooth_players;
+// Cached display names keyed by stable entity id (avoids per-frame JNI)
+static std::map<int, std::string> g_name_cache;
+static std::map<int, std::string> g_item_name_cache;
+static int g_frame_count = 0;
+
+// Menu-theme colors reused by the ESP plates so they match the ImGui window.
+static const ImU32 plate_bg_b = IM_COL32(15, 17, 22, 235);
+static const ImU32 plate_border = IM_COL32(48, 52, 66, 255);
+static const ImU32 plate_accent = IM_COL32(88, 140, 255, 200);
+static const ImU32 plate_text  = IM_COL32(235, 239, 245, 255);
+
+// A menu-style tablet name plate with a downward pointer toward the entity.
+static void draw_name_plate(ImDrawList* dl, float cx, float top_y, const char* text)
+{
+	ImVec2 ts = ImGui::CalcTextSize(text);
+	const float pad_x = 9.0f;
+	const float pad_y = 4.5f;
+	const float rounding = 6.0f;
+	const float pointer_h = 5.0f;
+
+	float w = ts.x + pad_x * 2.0f;
+	float h = ts.y + pad_y * 2.0f;
+	ImVec2 p0(cx - w * 0.5f, top_y);
+	ImVec2 p1(cx + w * 0.5f, top_y + h);
+
+	dl->AddRectFilled(p0, p1, plate_bg_b, rounding);
+	dl->AddRect(p0, p1, plate_accent, rounding, 0, 1.4f);
+	dl->AddRectFilled(ImVec2(p0.x + 2.0f, p0.y + 1.0f), ImVec2(p1.x - 2.0f, p0.y + 2.4f),
+		IM_COL32(120, 165, 255, 140), 1.0f);
+	dl->AddText(ImVec2(cx - ts.x * 0.5f, top_y + pad_y), plate_text, text);
+
+	dl->AddTriangleFilled(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y),
+		ImVec2(cx, p1.y + pointer_h), plate_bg_b);
+	dl->AddTriangle(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y),
+		ImVec2(cx, p1.y + pointer_h), plate_accent, 1.2f);
+}
+
+// Item ESP plate: icon tile (rarity color) + name, styled like the name tag.
+static void draw_item_plate(ImDrawList* dl, float cx, float top_y, const char* text,
+	unsigned char ir, unsigned char ig, unsigned char ib)
+{
+	const float icon_size = 18.0f;
+	const float pad_x = 8.0f;
+	const float pad_y = 4.0f;
+	const float gap = 7.0f;
+	const float rounding = 6.0f;
+	const float pointer_h = 5.0f;
+
+	ImVec2 ts = ImGui::CalcTextSize(text);
+	float h = icon_size + pad_y * 2.0f;
+	float w = pad_x + icon_size + gap + ts.x + pad_x;
+	if (w < h) w = h;
+
+	ImVec2 p0(cx - w * 0.5f, top_y);
+	ImVec2 p1(cx + w * 0.5f, top_y + h);
+
+	ImU32 icon_col = IM_COL32(ir, ig, ib, 255);
+	ImU32 icon_dark = IM_COL32((int)(ir * 0.16f), (int)(ig * 0.16f), (int)(ib * 0.16f), 255);
+
+	dl->AddRectFilled(p0, p1, plate_bg_b, rounding);
+	dl->AddRect(p0, p1, plate_border, rounding, 0, 1.0f);
+	dl->AddRectFilled(ImVec2(p0.x + 2.0f, p0.y + 1.0f), ImVec2(p1.x - 2.0f, p0.y + 2.0f),
+		IM_COL32(ir, ig, ib, 160), 1.0f);
+
+	ImVec2 ip0(p0.x + pad_x, top_y + pad_y);
+	ImVec2 ip1(ip0.x + icon_size, ip0.y + icon_size);
+	dl->AddRectFilled(ip0, ip1, icon_dark, 4.0f);
+	dl->AddRect(ip0, ip1, icon_col, 4.0f, 0, 1.2f);
+	dl->AddRectFilled(ImVec2(ip0.x + 1.0f, ip0.y + 1.0f), ImVec2(ip1.x - 1.0f, ip0.y + icon_size * 0.45f),
+		IM_COL32(255, 255, 255, 26), 3.0f);
+
+	char glyph[2] = { text[0], 0 };
+	if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
+	if (glyph[0] == 0) glyph[0] = '?';
+	ImVec2 gs = ImGui::CalcTextSize(glyph);
+	dl->AddText(ImVec2(ip0.x + (icon_size - gs.x) * 0.5f, ip0.y + (icon_size - gs.y) * 0.5f),
+		IM_COL32(235, 239, 245, 235), glyph);
+
+	dl->AddText(ImVec2(ip1.x + gap, top_y + (h - ts.y) * 0.5f), plate_text, text);
+
+	dl->AddTriangleFilled(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y),
+		ImVec2(cx, p1.y + pointer_h), plate_bg_b);
+	dl->AddTriangle(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y),
+		ImVec2(cx, p1.y + pointer_h), plate_border, 1.0f);
+}
+
+// Cache entity name to avoid repeated JNI calls
+static std::string get_entity_name(JNIEnv* env, jobject entity)
+{
+	std::string result;
+	jclass ec = sdk::classloader::find_class(env, sdk::mappings::entity_class_sig);
+	if (!ec) return result;
+	jmethodID get_name_mid = env->GetMethodID(ec,
+		sdk::mappings::entity_get_name_name,
+		sdk::mappings::entity_get_name_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	env->DeleteLocalRef(ec);
+	if (!get_name_mid) return result;
+
+	jobject name_text = env->CallObjectMethod(entity, get_name_mid);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); return result; }
+	if (!name_text) return result;
+
+jclass tc = sdk::classloader::find_class(env, sdk::mappings::text_class_sig);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            env->DeleteLocalRef(name_text);
+            return result;
+        }
+        if (!tc) { 
+            env->DeleteLocalRef(name_text); 
+            return result; 
+        }
+        jmethodID get_str_mid = env->GetMethodID(tc, sdk::mappings::text_get_string_name, sdk::mappings::text_get_string_sig);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            env->DeleteLocalRef(tc);
+            env->DeleteLocalRef(name_text);
+            return result;
+        }
+        if (get_str_mid)
+        {
+            jstring s = (jstring)env->CallObjectMethod(name_text, get_str_mid, 0x7FFFFFFF);
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                env->DeleteLocalRef(tc);
+                env->DeleteLocalRef(name_text);
+                return result;
+            }
+            if (s)
+            {
+                const char* utf = env->GetStringUTFChars(s, nullptr);
+                if (utf) { 
+                    result = utf; 
+                    env->ReleaseStringUTFChars(s, utf); 
+                }
+                else {
+                    env->DeleteLocalRef(s);
+                    env->DeleteLocalRef(tc);
+                    env->DeleteLocalRef(name_text);
+                    return result;
+                }
+                env->DeleteLocalRef(s);
+            }
+        }
+        env->DeleteLocalRef(tc);
+        env->DeleteLocalRef(name_text);
+        return result;
+}
+
+// Real account NICK for a player entity, taken from PlayerEntity.getGameProfile().
+// getName() here returns what the account is actually named, not a custom
+// display name the entity writes (nametags, plugins, funny custom names).
+// Returns empty on failure so the caller can fall back to Entity.getName().
+static std::string get_player_nick(JNIEnv* env, jobject entity)
+{
+	std::string result;
+	jclass pe = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
+	if (!pe) return result;
+	jmethodID get_profile_mid = env->GetMethodID(pe,
+		sdk::mappings::player_get_game_profile_name,
+		sdk::mappings::player_get_game_profile_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	env->DeleteLocalRef(pe);
+	if (!get_profile_mid) return result;
+
+	jobject profile = env->CallObjectMethod(entity, get_profile_mid);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); return result; }
+	if (!profile) return result;
+
+	jclass gc = env->GetObjectClass(profile);
+	if (!gc) { env->DeleteLocalRef(profile); return result; }
+	jmethodID get_name_mid = env->GetMethodID(gc,
+		sdk::mappings::game_profile_get_name_name,
+		sdk::mappings::game_profile_get_name_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (get_name_mid)
+	{
+		jstring name = (jstring)env->CallObjectMethod(profile, get_name_mid);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+		if (name)
+		{
+			const char* utf = env->GetStringUTFChars(name, nullptr);
+			if (utf) { result = utf; env->ReleaseStringUTFChars(name, utf); }
+			env->DeleteLocalRef(name);
+		}
+	}
+	env->DeleteLocalRef(gc);
+	env->DeleteLocalRef(profile);
+	return result;
+}
+
+// Vanilla Rarity colors for the Item ESP icon tile (from Rarity.index ordinal).
+// Fallback is the menu accent blue if the JNI lookup fails.
+static void get_item_rarity_color(JNIEnv* env, jobject stack, unsigned char& r, unsigned char& g, unsigned char& b)
+{
+	r = 88; g = 140; b = 255;
+	jclass sc = env->GetObjectClass(stack);
+	if (!sc) return;
+	jmethodID get_rarity_mid = env->GetMethodID(sc,
+		sdk::mappings::itemstack_get_rarity_name,
+		sdk::mappings::itemstack_get_rarity_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (!get_rarity_mid) { env->DeleteLocalRef(sc); return; }
+
+	jobject rarity = env->CallObjectMethod(stack, get_rarity_mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	env->DeleteLocalRef(sc);
+	if (!rarity) return;
+
+	jclass rc = sdk::classloader::find_class(env, sdk::mappings::rarity_class_sig);
+	if (!rc) { env->DeleteLocalRef(rarity); return; }
+	jfieldID idx_fid = env->GetFieldID(rc, sdk::mappings::rarity_index_name, sdk::mappings::rarity_index_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (idx_fid)
+	{
+		int idx = env->GetIntField(rarity, idx_fid);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+		switch (idx)
+		{
+			case 1:  r = 255; g = 214; b = 84;  break;  // uncommon (yellow)
+			case 2:  r = 94;  g = 196; b = 255; break;  // rare (aqua)
+			case 3:  r = 190; g = 124; b = 255; break;  // epic (light purple)
+			default: r = 168; g = 176; b = 188; break;  // common (light gray)
+		}
+	}
+	env->DeleteLocalRef(rc);
+	env->DeleteLocalRef(rarity);
+}
+
+// Make a translation key / raw name human-readable:
+// "item.minecraft.diamond_sword" -> "Diamond sword", player names kept as-is
+static std::string clean_name(const std::string& raw)
+{
+	if (raw.empty()) return raw;
+	std::string s = raw;
+	size_t dot = s.find_last_of('.');
+	if (dot != std::string::npos && dot + 1 < s.size())
+		s = s.substr(dot + 1);
+	for (char& c : s) if (c == '_') c = ' ';
+	if (!s.empty() && s[0] >= 'a' && s[0] <= 'z') s[0] = (char)(s[0] - 'a' + 'A');
+	return s;
+}
+
+void flaway::modules::esp::run()
+{
+	// Sync the vanilla-nametag suppression hook. It is installed lazily and
+	// only while a plate-rendering ESP feature is active; when off, the native
+	// function forwards to the original renderer so labels behave normally.
+	bool esp_any = globals::box_enabled || globals::esp_health_bar ||
+		globals::esp_name_enabled || globals::esp_item_enabled;
+	bool want_hide = esp_any && globals::esp_hide_vanilla_names;
+	nametag_hook::set_enabled(want_hide);
+	if (want_hide && !nametag_hook::is_initialized())
+	{
+		nametag_hook::init();
+	}
+
+	if (!esp_any)
+	{
+		std::lock_guard<std::mutex> lock(esp_mutex);
+		esp_players.clear();
+		esp_items.clear();
+		// Fully disabled: drop the name caches too (they are only keyed by
+		// entity id and would linger until the next world change otherwise).
+		g_name_cache.clear();
+		g_item_name_cache.clear();
+		return;
+	}
+
+	// Performance: the entity scan is the expensive part (JNI iteration over
+	// every player/entity). Throttle it to ~10 Hz; between refreshes
+	// draw_boxes() interpolates the stored positions, so the boxes still move
+	// smoothly while we only pay the JNI cost a fraction of the frames.
+	static auto g_last_scan = std::chrono::steady_clock::now();
+	auto g_now = std::chrono::steady_clock::now();
+	constexpr auto k_scan_interval = std::chrono::milliseconds(100);
+	if (g_now - g_last_scan < k_scan_interval) return;
+	g_last_scan = g_now;
+
+	auto env = flaway::instance->get_env();
+	if (!env || !sdk::instance) return;
+
+	// Hide ESP (and stop scanning) whenever a screen is open — inventory,
+	// Escape menu, etc. The overlay would otherwise draw on top of that UI.
+	if (sdk::instance->is_screen_open())
+	{
+		std::lock_guard<std::mutex> lock(esp_mutex);
+		esp_players.clear();
+		esp_items.clear();
+		return;
+	}
+
+	jobject world = sdk::instance->get_world();
+	if (!world)
+	{
+		if (g_last_world) { env->DeleteGlobalRef(g_last_world); g_last_world = nullptr; }
+		std::lock_guard<std::mutex> lock(esp_mutex);
+		esp_players.clear();
+		esp_items.clear();
+		return;
+	}
+
+	if (g_last_world)
+	{
+		if (!env->IsSameObject(g_last_world, world))
+		{
+			env->DeleteGlobalRef(g_last_world);
+			g_last_world = env->NewGlobalRef(world);
+			// Entity ids are reused across worlds/servers, so the name caches
+			// keyed by entity id would show stale/wrong names after the switch.
+			g_name_cache.clear();
+			g_item_name_cache.clear();
+		}
+	}
+	else g_last_world = env->NewGlobalRef(world);
+
+	jobject player = sdk::instance->get_player();
+	if (!player) { env->DeleteLocalRef(world); return; }
+
+	// Use camera data for correct yaw/pitch/position; fall back to player data if unavailable
+	sdk::camera_data cam = sdk::instance->get_camera();
+	double eye_x, eye_y, eye_z;
+	float cam_yaw, cam_pitch, cam_fov = 70.0f;
+	if (cam.valid)
+	{
+		eye_x = cam.x;
+		eye_y = cam.y;
+		eye_z = cam.z;
+		cam_yaw = cam.yaw;
+		cam_pitch = cam.pitch;
+		cam_fov = cam.fov;
+	}
+	else
+	{
+		sdk::entity_client player_entity(player);
+		eye_x = player_entity.get_x();
+		eye_y = player_entity.get_y() + 1.62;
+		eye_z = player_entity.get_z();
+		cam_yaw = player_entity.get_yaw();
+		cam_pitch = player_entity.get_pitch();
+	}
+
+	sdk::world_client wc(world);
+	std::vector<jobject> wplayers = wc.get_players();
+
+	jclass living_cls = sdk::classloader::find_class(env, sdk::mappings::living_entity_class_sig);
+	jmethodID get_health_mid = nullptr;
+	jmethodID get_max_health_mid = nullptr;
+	if (living_cls)
+	{
+		get_health_mid = env->GetMethodID(living_cls, sdk::mappings::living_entity_get_health_name, sdk::mappings::living_entity_get_health_sig);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+		get_max_health_mid = env->GetMethodID(living_cls, sdk::mappings::living_entity_get_max_health_name, sdk::mappings::living_entity_get_max_health_sig);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+		env->DeleteLocalRef(living_cls);
+	}
+
+	std::vector<esp_player_data> pdata;
+	for (jobject p : wplayers)
+	{
+		if (!p) continue;
+		sdk::entity_client ec(p);
+		if (ec.is_same_object(player)) continue;
+
+		esp_player_data d;
+		d.id = ec.get_entity_id();
+		d.x = ec.get_x();
+		d.y = ec.get_y();
+		d.z = ec.get_z();
+
+		// Cull entities far outside the render distance — avoids projecting
+		// (and drawing) boxes that would be off-screen anyway.
+		double dxp = d.x - eye_x;
+		double dyp = d.y - eye_y;
+		double dzp = d.z - eye_z;
+		if (dxp * dxp + dyp * dyp + dzp * dzp > 4096.0) // ~64 blocks
+			continue;
+
+		jobject bb = ec.get_bounding_box();
+		if (bb)
+		{
+			sdk::box_client bx(bb);
+			d.min_x = bx.get_min_x();
+			d.min_y = bx.get_min_y();
+			d.min_z = bx.get_min_z();
+			d.max_x = bx.get_max_x();
+			d.max_y = bx.get_max_y();
+			d.max_z = bx.get_max_z();
+			env->DeleteLocalRef(bb);
+		}
+		else
+		{
+			d.min_x = d.x - 0.3;
+			d.min_y = d.y;
+			d.min_z = d.z - 0.3;
+			d.max_x = d.x + 0.3;
+			d.max_y = d.y + 1.8;
+			d.max_z = d.z + 0.3;
+		}
+
+		// Resolve name from id cache; only do the (expensive) JNI lookup
+		// the first time we see this entity id.
+		auto ncit = g_name_cache.find(d.id);
+		if (ncit != g_name_cache.end())
+			d.name = ncit->second;
+		else
+		{
+			// Prefer the real account NICK (GameProfile) so the name tag never
+			// shows whatever custom name the entity writes.
+			d.name = get_player_nick(env, p);
+			if (d.name.empty())
+				d.name = get_entity_name(env, p);
+			if (!d.name.empty()) g_name_cache[d.id] = d.name;
+		}
+		d.health = 20.0f;
+		d.max_health = 20.0f;
+		if (get_health_mid && get_max_health_mid)
+		{
+			d.health = env->CallFloatMethod(p, get_health_mid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); d.health = 20.0f; }
+			d.max_health = env->CallFloatMethod(p, get_max_health_mid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); d.max_health = 20.0f; }
+		}
+		pdata.push_back(d);
+	}
+
+	std::vector<esp_item_data> idata;
+	if (globals::esp_item_enabled)
+	{
+		jclass item_entity_cls = sdk::classloader::find_class(env, sdk::mappings::item_entity_class_sig);
+		if (item_entity_cls)
+		{
+			std::vector<jobject> items = wc.get_entities_by_class(item_entity_cls);
+			for (jobject e : items)
+			{
+				if (!e) continue;
+
+			sdk::entity_client ec(e);
+			esp_item_data d;
+			d.id = ec.get_entity_id();
+			d.x = ec.get_x();
+			d.y = ec.get_y();
+			d.z = ec.get_z();
+			d.icon_r = 88; d.icon_g = 140; d.icon_b = 255;
+
+			// Cull distant items early — name resolution is the most expensive
+			// part (ItemStack -> Text -> String via JNI), skip it for items far
+			// outside the render distance.
+			{
+				double dxp = d.x - eye_x;
+				double dyp = d.y - eye_y;
+				double dzp = d.z - eye_z;
+				if (dxp * dxp + dyp * dyp + dzp * dzp > 4096.0) // ~64 blocks
+					continue;
+			}
+
+			// Name from id cache first; only do the heavy JNI resolution
+			// when we haven't resolved this item entity before.
+			auto icit = g_item_name_cache.find(d.id);
+			if (icit != g_item_name_cache.end() && !icit->second.empty())
+			{
+				d.name = icit->second;
+			}
+			else
+			{
+			// Get ItemStack from ItemEntity directly using method_6983 (getStack)
+				jmethodID get_stack_mid = env->GetMethodID(item_entity_cls,
+					sdk::mappings::item_entity_get_stack_name,
+					sdk::mappings::item_entity_get_stack_sig);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+
+				if (!get_stack_mid)
+				{
+					get_stack_mid = env->GetMethodID(item_entity_cls, "getStack",
+						"()Lnet/minecraft/class_1799;");
+					if (env->ExceptionCheck()) env->ExceptionClear();
+				}
+
+				if (get_stack_mid)
+				{
+					jobject stack = env->CallObjectMethod(e, get_stack_mid);
+					if (env->ExceptionCheck()) env->ExceptionClear();
+					if (stack)
+					{
+						get_item_rarity_color(env, stack, d.icon_r, d.icon_g, d.icon_b);
+						// Prefer ItemStack.getName() (honors custom names)
+						jclass sc = env->GetObjectClass(stack);
+						if (sc)
+						{
+							jmethodID get_name_mid = env->GetMethodID(sc, sdk::mappings::itemstack_get_name_name, sdk::mappings::itemstack_get_name_sig);
+							if (env->ExceptionCheck()) env->ExceptionClear();
+							if (get_name_mid)
+							{
+								jobject name_text = env->CallObjectMethod(stack, get_name_mid);
+								if (env->ExceptionCheck()) env->ExceptionClear();
+								if (name_text)
+								{
+jclass tc = sdk::classloader::find_class(env, sdk::mappings::text_class_sig);
+									if (tc)
+									{
+										jmethodID get_str_mid = env->GetMethodID(tc, sdk::mappings::text_get_string_name, sdk::mappings::text_get_string_sig);
+										if (env->ExceptionCheck()) env->ExceptionClear();
+										if (get_str_mid)
+										{
+											jstring s = (jstring)env->CallObjectMethod(name_text, get_str_mid, 0x7FFFFFFF);
+											if (env->ExceptionCheck()) env->ExceptionClear();
+											if (s)
+											{
+												const char* utf = env->GetStringUTFChars(s, nullptr);
+												if (utf) { d.name = utf; env->ReleaseStringUTFChars(s, utf); }
+												env->DeleteLocalRef(s);
+											}
+										}
+										env->DeleteLocalRef(tc);
+									}
+									env->DeleteLocalRef(name_text);
+								}
+							}
+							env->DeleteLocalRef(sc);
+						}
+						env->DeleteLocalRef(stack);
+					}
+				}
+
+				// Fallback to translation key if still empty
+				if (d.name.empty())
+				{
+					jobject stack = env->CallObjectMethod(e, get_stack_mid);
+					if (env->ExceptionCheck()) env->ExceptionClear();
+					if (stack)
+					{
+						jclass sc = env->GetObjectClass(stack);
+						if (sc)
+						{
+							jmethodID get_item_mid = env->GetMethodID(sc, sdk::mappings::itemstack_get_item_name, sdk::mappings::itemstack_get_item_sig);
+							if (env->ExceptionCheck()) env->ExceptionClear();
+							if (get_item_mid)
+							{
+								jobject item = env->CallObjectMethod(stack, get_item_mid);
+								if (env->ExceptionCheck()) env->ExceptionClear();
+								if (item)
+								{
+									jclass ic = env->GetObjectClass(item);
+									if (ic)
+									{
+										jmethodID get_key_mid = env->GetMethodID(ic, sdk::mappings::item_get_translation_key_name, sdk::mappings::item_get_translation_key_sig);
+										if (env->ExceptionCheck()) env->ExceptionClear();
+										if (get_key_mid)
+										{
+											jstring key = (jstring)env->CallObjectMethod(item, get_key_mid);
+											if (env->ExceptionCheck()) env->ExceptionClear();
+											if (key)
+											{
+												const char* ckey = env->GetStringUTFChars(key, nullptr);
+												if (ckey) { d.name = ckey; env->ReleaseStringUTFChars(key, ckey); }
+												env->DeleteLocalRef(key);
+											}
+										}
+										env->DeleteLocalRef(ic);
+									}
+									env->DeleteLocalRef(item);
+								}
+							}
+							env->DeleteLocalRef(sc);
+						}
+						env->DeleteLocalRef(stack);
+					}
+				}
+
+			if (d.name.empty())
+				d.name = get_entity_name(env, e);
+
+			if (!d.name.empty()) g_item_name_cache[d.id] = d.name;
+			} // end name-resolution else
+			idata.push_back(d);
+			}
+			for (jobject e : items) env->DeleteLocalRef(e);
+			env->DeleteLocalRef(item_entity_cls);
+		}
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(esp_mutex);
+		esp_players = std::move(pdata);
+		esp_items = std::move(idata);
+		esp_cam.cam_x = eye_x;
+		esp_cam.cam_y = eye_y;
+		esp_cam.cam_z = eye_z;
+		esp_cam.yaw = cam_yaw;
+		esp_cam.pitch = cam_pitch;
+		esp_cam.fov = cam_fov;
+		if (esp_cam.fov < 1.0f) esp_cam.fov = 70.0f;
+
+		// Drop smoothed positions for players that are no longer present
+		// (keeps the interpolation map from growing without bound).
+		for (auto it = g_smooth_players.begin(); it != g_smooth_players.end(); )
+		{
+			bool still_there = false;
+			for (const auto& pd : esp_players)
+				if (pd.id == it->first) { still_there = true; break; }
+			if (!still_there) it = g_smooth_players.erase(it);
+			else ++it;
+		}
+	}
+
+	for (jobject p : wplayers) env->DeleteLocalRef(p);
+	env->DeleteLocalRef(world);
+	env->DeleteLocalRef(player);
+}
+
+void flaway::modules::esp::draw_boxes()
+{
+	if (!globals::box_enabled && !globals::esp_health_bar && !globals::esp_name_enabled && !globals::esp_item_enabled) return;
+	if (!GUI::get_is_init()) return;
+
+	// Never draw ESP over an open screen (inventory / Escape / chat etc.).
+	if (sdk::instance && sdk::instance->is_screen_open()) return;
+
+	ImGuiIO& io = ImGui::GetIO();
+	int sw = (int)io.DisplaySize.x;
+	int sh = (int)io.DisplaySize.y;
+	if (sw <= 0 || sh <= 0) return;
+	float dt = io.DeltaTime;
+	if (dt < 0.0001f) dt = 0.016f;
+
+	ImDrawList* dl = ImGui::GetBackgroundDrawList();
+	if (!dl) return;
+
+	std::vector<esp_player_data> pc;
+	std::vector<esp_item_data> ic;
+	esp_camera_data cam;
+	{
+		std::lock_guard<std::mutex> lock(esp_mutex);
+		pc = esp_players;
+		ic = esp_items;
+		cam = esp_cam;
+	}
+	if (pc.empty() && ic.empty()) return;
+
+	// Build the shared projection once; other ESP overlays in this frame
+	// reuse the exact same matrix, so every module's boxes line up.
+	projection::set_view((float)cam.cam_x, (float)cam.cam_y, (float)cam.cam_z,
+		cam.yaw, cam.pitch, cam.fov, sw, sh);
+
+	static const ImU32 white = IM_COL32(255, 255, 255, 255);
+	static const ImU32 black = IM_COL32(0, 0, 0, 255);
+
+	// Smooth interpolation factor
+	float lerp_factor = 1.0f - powf(0.5f, dt * 15.0f);
+	if (lerp_factor > 1.0f) lerp_factor = 1.0f;
+	if (lerp_factor < 0.01f) lerp_factor = 0.01f;
+
+	g_frame_count++;
+
+	for (const auto& p : pc)
+	{
+		float offset = globals::esp_vertical_offset;
+
+		// Smooth interpolation: key by stable entity id (not position), so a
+		// moving player keeps the same track and never swaps with another.
+		// If the id is invalid (-1, e.g. mapping mismatch), skip smoothing and
+		// draw the raw position — otherwise every player would blend into one
+		// shared key and the boxes would fly all over the screen.
+		esp_player_data sp = p;
+		if (p.id > 0)
+		{
+			int key = p.id;
+			auto sit = g_smooth_players.find(key);
+			if (sit != g_smooth_players.end())
+			{
+				esp_player_data& prev = sit->second;
+				float lf = lerp_factor;
+				sp.x = prev.x + (p.x - prev.x) * lf;
+				sp.y = prev.y + (p.y - prev.y) * lf;
+				sp.z = prev.z + (p.z - prev.z) * lf;
+				sp.min_x = prev.min_x + (p.min_x - prev.min_x) * lf;
+				sp.min_y = prev.min_y + (p.min_y - prev.min_y) * lf;
+				sp.min_z = prev.min_z + (p.min_z - prev.min_z) * lf;
+				sp.max_x = prev.max_x + (p.max_x - prev.max_x) * lf;
+				sp.max_y = prev.max_y + (p.max_y - prev.max_y) * lf;
+				sp.max_z = prev.max_z + (p.max_z - prev.max_z) * lf;
+			}
+			g_smooth_players[key] = sp;
+		}
+
+		float corners[8][3] = {
+			{(float)sp.min_x, (float)sp.min_y + offset, (float)sp.min_z},
+			{(float)sp.max_x, (float)sp.min_y + offset, (float)sp.min_z},
+			{(float)sp.max_x, (float)sp.min_y + offset, (float)sp.max_z},
+			{(float)sp.min_x, (float)sp.min_y + offset, (float)sp.max_z},
+			{(float)sp.min_x, (float)sp.max_y + offset, (float)sp.min_z},
+			{(float)sp.max_x, (float)sp.max_y + offset, (float)sp.min_z},
+			{(float)sp.max_x, (float)sp.max_y + offset, (float)sp.max_z},
+			{(float)sp.min_x, (float)sp.max_y + offset, (float)sp.max_z}
+		};
+
+		float sx[8], sy[8];
+		bool corner_visible[8] = { false, false, false, false, false, false, false, false };
+		int valid = 0;
+		float min_x = FLT_MAX, max_x = -FLT_MAX;
+		float min_y = FLT_MAX, max_y = -FLT_MAX;
+
+		for (int i = 0; i < 8; i++)
+		{
+			if (projection::world_to_screen(corners[i][0], corners[i][1], corners[i][2], sx[i], sy[i]))
+			{
+				corner_visible[i] = true;
+				if (sx[i] < min_x) min_x = sx[i];
+				if (sx[i] > max_x) max_x = sx[i];
+				if (sy[i] < min_y) min_y = sy[i];
+				if (sy[i] > max_y) max_y = sy[i];
+				valid++;
+			}
+		}
+		if (valid < 4) continue;
+
+		float box_rounding = 4.0f;
+
+		if (globals::box_enabled)
+		{
+			if (globals::esp_mode == 3)
+			{
+				// 3D wireframe box from the actual AABB corners.
+				static const int edges[12][2] = {
+					{0,1},{1,2},{2,3},{3,0},
+					{4,5},{5,6},{6,7},{7,4},
+					{0,4},{1,5},{2,6},{3,7}
+				};
+				for (int e = 0; e < 12; e++)
+				{
+					int a = edges[e][0], b = edges[e][1];
+					if (!corner_visible[a] || !corner_visible[b]) continue;
+					dl->AddLine(ImVec2(sx[a], sy[a]), ImVec2(sx[b], sy[b]), white, 1.5f);
+				}
+			}
+			else
+			{
+				dl->AddRect(ImVec2(min_x, min_y), ImVec2(max_x, max_y), white, box_rounding, 0, 1.5f);
+				dl->AddRect(ImVec2(min_x - 1, min_y - 1), ImVec2(max_x + 1, max_y + 1), black, box_rounding + 1.0f, 0, 1.0f);
+			}
+		}
+
+		if (globals::esp_health_bar && sp.max_health > 0)
+		{
+			float hp = sp.health / sp.max_health;
+			if (hp > 1.0f) hp = 1.0f;
+			if (hp < 0.0f) hp = 0.0f;
+			float bw = 3.0f;
+			float bh = max_y - min_y;
+			float bx = min_x - bw - 3.0f;
+			float fh = bh * hp;
+
+			ImU32 hc;
+			if (hp > 0.5f)
+			{
+				float t = (hp - 0.5f) * 2.0f;
+				hc = IM_COL32((int)(255 * (1.0f - t)), 255, 0, 255);
+			}
+			else
+			{
+				float t = hp * 2.0f;
+				hc = IM_COL32(255, (int)(255 * t), 0, 255);
+			}
+			dl->AddRectFilled(ImVec2(bx - 1, min_y - 1), ImVec2(bx + bw + 1, max_y + 1), black, 2.0f);
+			dl->AddRectFilled(ImVec2(bx, min_y), ImVec2(bx + bw, max_y), IM_COL32(50, 50, 50, 200), 2.0f);
+			dl->AddRectFilled(ImVec2(bx, max_y - fh), ImVec2(bx + bw, max_y), hc, 2.0f);
+		}
+
+		if (!p.name.empty() && globals::esp_name_enabled)
+		{
+			std::string disp = clean_name(p.name);
+			float nx = (min_x + max_x) * 0.5f;
+			float ny = min_y - 20.0f;
+			(void)sp;
+			draw_name_plate(dl, nx, ny, disp.c_str());
+		}
+	}
+
+	for (const auto& item : ic)
+	{
+		if (item.name.empty()) continue;
+		float sx, sy;
+		float offset = globals::esp_vertical_offset;
+		if (!projection::world_to_screen((float)item.x, (float)item.y + 0.3f + offset, (float)item.z, sx, sy)) continue;
+
+		std::string label = clean_name(item.name);
+		draw_item_plate(dl, sx, sy - 15.0f, label.c_str(),
+			item.icon_r, item.icon_g, item.icon_b);
+	}
+}
+
+// Cleanup cached smoothed positions, name lookups and the pinned world ref.
+// Called on shutdown/unhook (needs the JVM to still be alive to free the ref).
+void flaway::modules::esp::cleanup()
+{
+	g_smooth_players.clear();
+	g_name_cache.clear();
+	g_item_name_cache.clear();
+	if (g_last_world)
+	{
+		if (flaway::instance)
+		{
+			if (auto env = flaway::instance->get_env())
+				env->DeleteGlobalRef(g_last_world);
+		}
+		g_last_world = nullptr;
+	}
+}

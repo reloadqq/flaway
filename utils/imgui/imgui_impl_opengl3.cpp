@@ -113,7 +113,11 @@
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
 #include "flaway/utils/no_log.h"
+#include "flaway/utils/rlog.h"
 #include <stdint.h>     // intptr_t
+#if defined(__linux__)
+#include <malloc.h>     // malloc_usable_size (buffer sanity log in CreateFontsTexture)
+#endif
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
@@ -436,6 +440,8 @@ static void ImGui_ImplOpenGL3_SetupRenderState(ImDrawData* draw_data, int fb_wid
 #if defined(GL_CLIP_ORIGIN)
     if (!clip_origin_lower_left) { float tmp = T; T = B; B = tmp; } // Swap top and bottom if origin is upper left
 #endif
+    rlog::logf("gl: SetupRenderState viewport=(0,0 %dx%d) ortho L=%.0f R=%.0f T=%.0f B=%.0f",
+               fb_width, fb_height, (double)L, (double)R, (double)T, (double)B);
     const float ortho_projection[4][4] =
     {
         { 2.0f/(R-L),   0.0f,         0.0f,   0.0f },
@@ -477,7 +483,26 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
     int fb_width = (int)(draw_data->DisplaySize.x * draw_data->FramebufferScale.x);
     int fb_height = (int)(draw_data->DisplaySize.y * draw_data->FramebufferScale.y);
     if (fb_width <= 0 || fb_height <= 0)
+    {
+        rlog::logf("gl: draw SKIPPED (fb %dx%d) disp=%.0fx%.0f scale=%.2f,%.2f",
+                   fb_width, fb_height, (double)draw_data->DisplaySize.x, (double)draw_data->DisplaySize.y,
+                   (double)draw_data->FramebufferScale.x, (double)draw_data->FramebufferScale.y);
         return;
+    }
+    {
+        static int s_lfbw = -1, s_lfbh = -1;
+        static float s_lsx = -1.0f, s_lsy = -1.0f;
+        if (fb_width != s_lfbw || fb_height != s_lfbh ||
+            draw_data->FramebufferScale.x != s_lsx || draw_data->FramebufferScale.y != s_lsy) {
+            s_lfbw = fb_width; s_lfbh = fb_height;
+            s_lsx = draw_data->FramebufferScale.x; s_lsy = draw_data->FramebufferScale.y;
+            rlog::logf("gl: draw disp=%.0fx%.0f scale=%.2f,%.2f -> fb=%dx%d lists=%d vtx=%d idx=%d",
+                       (double)draw_data->DisplaySize.x, (double)draw_data->DisplaySize.y,
+                       (double)draw_data->FramebufferScale.x, (double)draw_data->FramebufferScale.y,
+                       fb_width, fb_height, draw_data->CmdListsCount,
+                       draw_data->TotalVtxCount, draw_data->TotalIdxCount);
+        }
+    }
 
     ImGui_ImplOpenGL3_Data* bd = ImGui_ImplOpenGL3_GetBackendData();
 
@@ -654,6 +679,7 @@ void    ImGui_ImplOpenGL3_RenderDrawData(ImDrawData* draw_data)
 
     glViewport(last_viewport[0], last_viewport[1], (GLsizei)last_viewport[2], (GLsizei)last_viewport[3]);
     glScissor(last_scissor_box[0], last_scissor_box[1], (GLsizei)last_scissor_box[2], (GLsizei)last_scissor_box[3]);
+    rlog::gl_drain("backend.RenderDrawData");
     (void)bd; // Not all compilation paths use this
 }
 
@@ -665,23 +691,72 @@ bool ImGui_ImplOpenGL3_CreateFontsTexture()
     // Build texture atlas
     unsigned char* pixels;
     int width, height;
+    rlog::logf("gl: building font atlas (GetTexDataAsRGBA32)...");
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);   // Load as RGBA 32-bit (75% of the memory is wasted, but default font is so small) because it is more likely to be compatible with user's existing shaders. If your ImTextureId represent a higher-level concept than just a GL texture id, consider calling GetTexDataAsAlpha8() instead to save on GPU memory.
+    rlog::logf("gl: font atlas rasterized %dx%d px, fonts=%d", width, height, io.Fonts->Fonts.Size);
+
+    // Buffer sanity for the upload below: the SIGSEGV we chase happens inside
+    // this glTexImage2D (a 1MB memcpy whose source tail lands in a protected
+    // page), so record the exact pointer/size/usable-size and whether the
+    // allocation ends exactly at its mapping edge (an over-read would then
+    // fall into the neighbouring page, often PROT_NONE).
+    {
+        size_t want = (size_t)width * (size_t)height * 4;
+#if defined(__linux__)
+        size_t have = malloc_usable_size(pixels);
+#else
+        size_t have = want;
+#endif
+        char vma[256], after[256];
+        rlog::describe_vma((unsigned long)pixels, vma, sizeof(vma));
+        rlog::describe_vma((unsigned long)pixels + want, after, sizeof(after));
+        rlog::logf("gl: upload buf ptr=%p want=%zu usable=%zu%s",
+                   (void*)pixels, want, have, (have < want) ? " *** TOO SMALL ***" : "");
+        rlog::logf("gl: upload buf vma=%s", vma);
+        rlog::logf("gl: upload buf next-page=%s", after);
+    }
 
     // Upload texture to graphics system
     // (Bilinear sampling is required by default. Set 'io.Fonts->Flags |= ImFontAtlasFlags_NoBakedLines' or 'style.AntiAliasedLinesUseTex = false' to allow point/nearest sampling)
     GLint last_texture;
     GL_CALL(glGetIntegerv(GL_TEXTURE_BINDING_2D, &last_texture));
+    // Record the pixel-store state the game left behind: a stale
+    // GL_UNPACK_SKIP_PIXELS/ROWS shifts the source pointer the driver reads
+    // from, which would make this upload read past the end of the pixel
+    // buffer (the SIGSEGV we are chasing). Logged before we clear it, and
+    // put back afterwards — the game owns this state.
+    GLint last_row_length = 0, last_skip_pixels = 0, last_skip_rows = 0;
+    {
+        GLint align = 0;
+        GL_CALL(glGetIntegerv(GL_UNPACK_ROW_LENGTH, &last_row_length));
+        GL_CALL(glGetIntegerv(0x0CF4 /*GL_UNPACK_SKIP_PIXELS*/, &last_skip_pixels));
+        GL_CALL(glGetIntegerv(0x0CF3 /*GL_UNPACK_SKIP_ROWS*/, &last_skip_rows));
+        GL_CALL(glGetIntegerv(0x0CF5 /*GL_UNPACK_ALIGNMENT*/, &align));
+        rlog::logf("gl: unpack from game: row_length=%d skip_pixels=%d skip_rows=%d align=%d%s",
+                   (int)last_row_length, (int)last_skip_pixels, (int)last_skip_rows, (int)align,
+                   (last_skip_pixels || last_skip_rows) ? " *** NONZERO -> source pointer shifted ***" : "");
+    }
     GL_CALL(glGenTextures(1, &bd->FontTexture));
     GL_CALL(glBindTexture(GL_TEXTURE_2D, bd->FontTexture));
     GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
     GL_CALL(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
 #ifdef GL_UNPACK_ROW_LENGTH // Not on WebGL/ES
     GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
+    GL_CALL(glPixelStorei(0x0CF4 /*GL_UNPACK_SKIP_PIXELS*/, 0));
+    GL_CALL(glPixelStorei(0x0CF3 /*GL_UNPACK_SKIP_ROWS*/, 0));
 #endif
     GL_CALL(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels));
+#ifdef GL_UNPACK_ROW_LENGTH // Not on WebGL/ES
+    GL_CALL(glPixelStorei(GL_UNPACK_ROW_LENGTH, last_row_length));
+    GL_CALL(glPixelStorei(0x0CF4 /*GL_UNPACK_SKIP_PIXELS*/, last_skip_pixels));
+    GL_CALL(glPixelStorei(0x0CF3 /*GL_UNPACK_SKIP_ROWS*/, last_skip_rows));
+#endif
 
     // Store our identifier
     io.Fonts->SetTexID((ImTextureID)(intptr_t)bd->FontTexture);
+    rlog::logf("gl: font texture uploaded id=%u %dx%d filter=GL_LINEAR (atlas texID now %p)",
+               bd->FontTexture, width, height, (void*)io.Fonts->TexID);
+    rlog::gl_drain("CreateFontsTexture");
 
     // Restore state
     GL_CALL(glBindTexture(GL_TEXTURE_2D, last_texture));
@@ -695,6 +770,7 @@ void ImGui_ImplOpenGL3_DestroyFontsTexture()
     ImGui_ImplOpenGL3_Data* bd = ImGui_ImplOpenGL3_GetBackendData();
     if (bd->FontTexture)
     {
+        rlog::logf("gl: font texture DESTROYED id=%u (all text vanishes until rebuild)", bd->FontTexture);
         glDeleteTextures(1, &bd->FontTexture);
         io.Fonts->SetTexID(0);
         bd->FontTexture = 0;
@@ -716,7 +792,10 @@ static bool CheckShader(GLuint handle, const char* desc)
         buf.resize((int)(log_length + 1));
         glGetShaderInfoLog(handle, log_length, nullptr, (GLchar*)buf.begin());
         fprintf(stderr, "%s\n", buf.begin());
+        rlog::logf("gl: shader '%s' info log (compile_ok=%d): %.300s", desc, (int)status, buf.begin());
     }
+    if ((GLboolean)status == GL_FALSE)
+        rlog::logf("gl: SHADER COMPILE FAILED '%s' glsl='%s'", desc, bd->GlslVersionString);
     return (GLboolean)status == GL_TRUE;
 }
 
@@ -735,13 +814,17 @@ static bool CheckProgram(GLuint handle, const char* desc)
         buf.resize((int)(log_length + 1));
         glGetProgramInfoLog(handle, log_length, nullptr, (GLchar*)buf.begin());
         fprintf(stderr, "%s\n", buf.begin());
+        rlog::logf("gl: program '%s' info log (link_ok=%d): %.300s", desc, (int)status, buf.begin());
     }
+    if ((GLboolean)status == GL_FALSE)
+        rlog::logf("gl: PROGRAM LINK FAILED '%s' glsl='%s' -> overlay draws nothing", desc, bd->GlslVersionString);
     return (GLboolean)status == GL_TRUE;
 }
 
 bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
 {
     ImGui_ImplOpenGL3_Data* bd = ImGui_ImplOpenGL3_GetBackendData();
+    rlog::logf("gl: CreateDeviceObjects start");
 
     // Backup GL state
     GLint last_texture, last_array_buffer;
@@ -910,6 +993,9 @@ bool    ImGui_ImplOpenGL3_CreateDeviceObjects()
     bd->AttribLocationVtxPos = (GLuint)glGetAttribLocation(bd->ShaderHandle, "Position");
     bd->AttribLocationVtxUV = (GLuint)glGetAttribLocation(bd->ShaderHandle, "UV");
     bd->AttribLocationVtxColor = (GLuint)glGetAttribLocation(bd->ShaderHandle, "Color");
+    rlog::logf("gl: device objects OK program=%u tex=%d proj=%d pos=%u uv=%u col=%u",
+               bd->ShaderHandle, (int)bd->AttribLocationTex, (int)bd->AttribLocationProjMtx,
+               bd->AttribLocationVtxPos, bd->AttribLocationVtxUV, bd->AttribLocationVtxColor);
 
     // Create buffers
     glGenBuffers(1, &bd->VboHandle);

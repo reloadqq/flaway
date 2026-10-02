@@ -13,6 +13,7 @@ static int state = 0;
 static ULONGLONG state_start_time = 0;
 static float saved_yaw = 0.0f;
 static float saved_pitch = 0.0f;
+static int original_slot = -1;
 static bool last_key_state = false;
 static bool pearl_catch_toggled = false;
 
@@ -310,12 +311,68 @@ void flaway::modules::pearl_catch::swap_to_slot(int slot)
 	env->DeleteLocalRef(inventory);
 }
 
+// Hotbar slot currently selected (PlayerInventory.selected), so the sequence
+// can put the player back on the slot they were using before the pearl swap.
+static int get_selected_slot()
+{
+	jobject player = sdk::instance->get_player();
+	if (!player) return -1;
+
+	auto env = flaway::instance->get_env();
+	if (!env) return -1;
+
+	jclass player_class = env->GetObjectClass(player);
+	if (!player_class)
+	{
+		env->DeleteLocalRef(player);
+		return -1;
+	}
+
+	jfieldID inventory_fid = env->GetFieldID(player_class, sdk::mappings::player_inventory_name, sdk::mappings::player_inventory_sig);
+	env->DeleteLocalRef(player_class);
+	if (!inventory_fid)
+	{
+		env->DeleteLocalRef(player);
+		return -1;
+	}
+
+	jobject inventory = env->GetObjectField(player, inventory_fid);
+	env->DeleteLocalRef(player);
+	if (!inventory) return -1;
+
+	jclass inventory_class = env->GetObjectClass(inventory);
+	int slot = -1;
+	if (inventory_class)
+	{
+		jfieldID selected_slot_fid = env->GetFieldID(inventory_class, sdk::mappings::inventory_selected_slot_name, sdk::mappings::inventory_selected_slot_sig);
+		if (selected_slot_fid) slot = env->GetIntField(inventory, selected_slot_fid);
+		env->DeleteLocalRef(inventory_class);
+	}
+
+	env->DeleteLocalRef(inventory);
+	return slot;
+}
+
 void flaway::modules::pearl_catch::run()
 {
 	// Module on/off gate (menu checkbox)
 	if (!globals::pearl_catch_enabled)
 	{
+		// Abort mid-sequence without leaving the hotbar on the pearl and the
+		// camera stuck looking down.
+		if (state != 0)
+		{
+			if (original_slot >= 0 && original_slot <= 8) swap_to_slot(original_slot);
+			jobject player = sdk::instance->get_player();
+			if (player)
+			{
+				if (globals::pearl_catch_aim_mode != 0) set_rotation(player, saved_yaw, saved_pitch);
+				auto env = flaway::instance->get_env();
+				if (env) env->DeleteLocalRef(player);
+			}
+		}
 		state = 0;
+		original_slot = -1;
 		pearl_catch_toggled = false;
 		last_key_state = false;
 		return;
@@ -364,6 +421,7 @@ void flaway::modules::pearl_catch::run()
 		}
 		
 		// Start the sequence
+		original_slot = get_selected_slot();
 		jobject player = sdk::instance->get_player();
 		if (player)
 		{
@@ -399,13 +457,14 @@ void flaway::modules::pearl_catch::run()
 
 	switch (state)
 	{
+		// Find the pearl and take it into the active slot.
 		case 1:
 		{
 			int pearl_slot = find_item_in_hotbar(player, "ender_pearl");
 			if (pearl_slot == -1)
 			{
-				state = 4;
-				state_start_time = now;
+				state = 0;
+				original_slot = -1;
 				break;
 			}
 			
@@ -415,6 +474,7 @@ void flaway::modules::pearl_catch::run()
 			break;
 		}
 		
+		// Wait for the swap, then throw the pearl down.
 		case 2:
 		{
 			if (elapsed < SWAP_DELAY) 
@@ -438,62 +498,16 @@ void flaway::modules::pearl_catch::run()
 			break;
 		}
 		
+		// Let the throw register, then put the old slot back.
 		case 3:
 		{
 			if (!silent_mode) set_rotation(player, saved_yaw, -90.0f);
 			if (elapsed < AFTER_USE_DELAY) break;
 			
-			state = 4;
-			state_start_time = now;
-			break;
-			}
-			
-		case 4:
-		{
-			int windcharge_slot = find_item_in_hotbar(player, "wind_charge");
-			if (windcharge_slot == -1)
-			{
-				if (!silent_mode) set_rotation(player, saved_yaw, saved_pitch);
-				state = 0;
-				break;
-			}
-			
-			swap_to_slot(windcharge_slot);
-			state = 5;
-			state_start_time = now;
-			break;
-		}
-		
-		case 5:
-		{
-			if (elapsed < SWAP_DELAY) 
-			{
-				if (!silent_mode) set_rotation(player, saved_yaw, -90.0f);
-				break;
-			}
-			
-			if (silent_mode)
-			{
-				use_item_silent(player, -90.0f);
-			}
-			else
-			{
-				set_rotation(player, saved_yaw, -90.0f);
-				send_right_click();
-			}
-			
-			state = 6;
-			state_start_time = now;
-			break;
-		}
-		
-		case 6:
-		{
-			if (!silent_mode) set_rotation(player, saved_yaw, -90.0f);
-			if (elapsed < AFTER_USE_DELAY) break;
-			
+			if (original_slot >= 0 && original_slot <= 8) swap_to_slot(original_slot);
 			if (!silent_mode) set_rotation(player, saved_yaw, saved_pitch);
 			state = 0;
+			original_slot = -1;
 			break;
 		}
 	}

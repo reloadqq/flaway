@@ -1,3 +1,2 @@
 # flaway-client
-debian + 1.21.4 inject
-
+$15 vibecoded internal for minecraft

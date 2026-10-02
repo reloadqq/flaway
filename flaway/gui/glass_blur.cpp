@@ -46,6 +46,7 @@ typedef void   (*PFNGLENABLEPROC)(unsigned);
 typedef void   (*PFNGLVIEWPORTPROC)(int, int, int, int);
 typedef void   (*PFNGLSCISSORPROC)(int, int, int, int);
 typedef void   (*PFNGLGETINTEGERVPROC)(unsigned, int*);
+typedef unsigned char (*PFNGLISENABLEDPROC)(unsigned);
 typedef void   (*PFNGLBLENDFUNCPROC)(unsigned, unsigned);
 typedef void   (*PFNGLBINDVERTEXARRAYPROC)(unsigned);
 typedef void   (*PFNGLGENVERTEXARRAYSPROC)(int, unsigned*);
@@ -101,6 +102,7 @@ static PFNGLENABLEPROC _glEnable = nullptr;
 static PFNGLVIEWPORTPROC _glViewport = nullptr;
 static PFNGLSCISSORPROC _glScissor = nullptr;
 static PFNGLGETINTEGERVPROC _glGetIntegerv = nullptr;
+static PFNGLISENABLEDPROC _glIsEnabled = nullptr;
 static PFNGLBLENDFUNCPROC _glBlendFunc = nullptr;
 static PFNGLBINDVERTEXARRAYPROC _glBindVertexArray = nullptr;
 static PFNGLGENVERTEXARRAYSPROC _glGenVertexArrays = nullptr;
@@ -208,6 +210,7 @@ static bool load_gl() {
     _glViewport = (PFNGLVIEWPORTPROC)dlsym(RTLD_DEFAULT, "glViewport");
     _glScissor = (PFNGLSCISSORPROC)dlsym(RTLD_DEFAULT, "glScissor");
     _glGetIntegerv = (PFNGLGETINTEGERVPROC)dlsym(RTLD_DEFAULT, "glGetIntegerv");
+    _glIsEnabled = (PFNGLISENABLEDPROC)dlsym(RTLD_DEFAULT, "glIsEnabled");
     _glBlendFunc = (PFNGLBLENDFUNCPROC)dlsym(RTLD_DEFAULT, "glBlendFunc");
     _glBindVertexArray = (PFNGLBINDVERTEXARRAYPROC)dlsym(RTLD_DEFAULT, "glBindVertexArray");
     _glGenVertexArrays = (PFNGLGENVERTEXARRAYSPROC)dlsym(RTLD_DEFAULT, "glGenVertexArrays");
@@ -233,6 +236,7 @@ static bool load_gl() {
         && _glBindBuffer && _glBufferData && _glEnableVertexAttribArray
         && _glVertexAttribPointer && _glDrawArrays && _glDisable
         && _glEnable && _glViewport && _glScissor && _glBlendFunc
+        && _glIsEnabled
         && _glBlitFramebuffer;
     return loaded;
 }
@@ -244,7 +248,49 @@ static bool check_fbo(unsigned fbo) {
     return status == 0x8CD5; // GL_FRAMEBUFFER_COMPLETE
 }
 
+// --- state save/restore -----------------------------------------------------
+// This context belongs to the game: everything we touch has to come back
+// exactly as we found it (Minecraft/Sodium may cache some of it).
+static const unsigned GL_ACTIVE_TEXTURE = 0x84C0;
+static const unsigned GL_TEXTURE_BINDING_2D = 0x806A;
+static const unsigned GL_VERTEX_ARRAY_BINDING = 0x85B5;
+static const unsigned GL_ARRAY_BUFFER_BINDING = 0x8894;
+static const unsigned GL_READ_FRAMEBUFFER_BINDING = 0x8CAA;
+
+static int get_int(unsigned pname) {
+    int v = 0;
+    if (_glGetIntegerv) _glGetIntegerv(pname, &v);
+    return v;
+}
+
+// Minecraft's GlStateManager caches the active texture unit and the texture
+// bound on it: if we change either without it knowing, the game will skip its
+// own glBindTexture/glActiveTexture forever and the world samples whatever
+// texture we left behind (unit0 = the block atlas -> black world). Everything
+// we do with textures therefore happens on GL_TEXTURE0 and is put back exactly.
+struct TexState { unsigned active; int binding0; };
+
+static TexState save_tex_state() {
+    TexState s;
+    s.active = (unsigned)get_int(GL_ACTIVE_TEXTURE);
+    if (!s.active) s.active = GL_TEXTURE0;
+    if (_glActiveTexture) _glActiveTexture(GL_TEXTURE0);
+    s.binding0 = get_int(GL_TEXTURE_BINDING_2D);
+    if (_glActiveTexture) _glActiveTexture(s.active);
+    return s;
+}
+
+static void restore_tex_state(const TexState& s) {
+    if (_glActiveTexture) _glActiveTexture(GL_TEXTURE0);
+    if (_glBindTexture) _glBindTexture(GL_TEXTURE_2D, (unsigned)s.binding0);
+    if (_glActiveTexture) _glActiveTexture(s.active);
+}
+
 static unsigned create_tex_fbo(int w, int h, unsigned* fbo_out) {
+    TexState tex_st = save_tex_state();
+    unsigned prev_fbo = (unsigned)get_int(0x8CA6); // GL_DRAW_FRAMEBUFFER_BINDING
+    unsigned prev_read_fbo = (unsigned)get_int(GL_READ_FRAMEBUFFER_BINDING);
+    if (_glActiveTexture) _glActiveTexture(GL_TEXTURE0);
     unsigned tex = 0;
     unsigned fbo = 0;
     _glGenTextures(1, &tex);
@@ -259,15 +305,20 @@ static unsigned create_tex_fbo(int w, int h, unsigned* fbo_out) {
     _glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     _glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
     bool ok = check_fbo(fbo);
-    _glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
     if (!ok) {
         _glDeleteTextures(1, &tex);
         _glDeleteFramebuffers(1, &fbo);
         if (fbo_out) *fbo_out = 0;
+        _glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read_fbo);
+        _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_fbo);
+        restore_tex_state(tex_st);
         return 0;
     }
     if (fbo_out) *fbo_out = fbo;
+    _glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read_fbo);
+    _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_fbo);
+    restore_tex_state(tex_st);
     return tex;
 }
 
@@ -364,6 +415,7 @@ static void setup_quad() {
          1.0f,  1.0f,  1.0f, 1.0f,
         -1.0f,  1.0f,  0.0f, 1.0f,
     };
+    int prev_array_buf = get_int(GL_ARRAY_BUFFER_BINDING);
     _glGenVertexArrays(1, &s_quad_vao);
     _glBindVertexArray(s_quad_vao);
     _glGenBuffers(1, &s_quad_vbo);
@@ -374,12 +426,14 @@ static void setup_quad() {
     _glEnableVertexAttribArray(1);
     _glVertexAttribPointer(1, 2, GL_FLOAT, false, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     _glBindVertexArray(0);
+    _glBindBuffer(GL_ARRAY_BUFFER, (unsigned)prev_array_buf);
 }
 
 static void draw_fullscreen() {
+    int prev_vao = get_int(GL_VERTEX_ARRAY_BINDING);
     _glBindVertexArray(s_quad_vao);
     _glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-    _glBindVertexArray(0);
+    _glBindVertexArray((unsigned)prev_vao);
 }
 
 bool glass_blur::init() {
@@ -447,17 +501,26 @@ void glass_blur::capture_framebuffer(int width, int height) {
     if (width != s_width || height != s_height) resize(width, height);
     if (!s_src_fbo) return;
 
-    // Save current viewport
+    // Save current viewport + scissor flag
     int saved_viewport[4];
     _glGetIntegerv(0x0BA2, saved_viewport); // GL_VIEWPORT
+    unsigned saved_draw_fbo = (unsigned)get_int(0x8CA6); // GL_DRAW_FRAMEBUFFER_BINDING
+    unsigned saved_read_fbo = (unsigned)get_int(GL_READ_FRAMEBUFFER_BINDING);
+    int saved_scissor = _glIsEnabled(0x0C11) ? 1 : 0; // GL_SCISSOR_TEST
+
+    // The capture blit must copy the whole frame: a game scissor box would
+    // clip it (blits are scissored) and leave stale pixels in the blur source.
+    _glDisable(0x0C11);
 
     // Downscale during capture: blit from default FB (full) into src_fbo (already at blur scale)
     _glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_src_fbo);
     _glBlitFramebuffer(0, 0, width, height, 0, 0, s_blur_tex_w, s_blur_tex_h, 0x00004000, GL_NEAREST);
-    _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    _glBindFramebuffer(GL_READ_FRAMEBUFFER, saved_read_fbo);
+    _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, saved_draw_fbo);
 
-    // Restore viewport
+    // Restore viewport + scissor
+    if (saved_scissor) _glEnable(0x0C11); else _glDisable(0x0C11);
     _glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
 }
 
@@ -490,14 +553,20 @@ unsigned int glass_blur::blur(int passes) {
     _glGetIntegerv(0x8B8D, (int*)&saved_program); // GL_CURRENT_PROGRAM
     unsigned saved_fbo = 0;
     _glGetIntegerv(0x8CA6, (int*)&saved_fbo); // GL_FRAMEBUFFER_BINDING
-    int saved_scissor = 0;
-    _glGetIntegerv(0x0C11, &saved_scissor); // GL_SCISSOR_TEST
+    unsigned saved_read_fbo = (unsigned)get_int(GL_READ_FRAMEBUFFER_BINDING);
+    int saved_scissor = _glIsEnabled(0x0C11) ? 1 : 0; // GL_SCISSOR_TEST
+    TexState tex_st = save_tex_state();
+
+    // Our blits and fullscreen draws must cover the whole target: scissor is a
+    // clip for the game, not for us — disable it here, put it back at the end.
+    _glDisable(0x0C11);
 
     // Downscale source into ping
     _glBindFramebuffer(GL_READ_FRAMEBUFFER, s_src_fbo);
     _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_ping_fbo);
     _glBlitFramebuffer(0, 0, s_blur_tex_w, s_blur_tex_h, 0, 0, bw, bh, 0x00004000, GL_NEAREST);
-    _glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    _glBindFramebuffer(GL_READ_FRAMEBUFFER, saved_read_fbo);
+    _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, saved_fbo);
 
     // Multi-pass Gaussian blur (ping-pong)
     for (int i = 0; i < passes; i++) {
@@ -506,10 +575,12 @@ unsigned int glass_blur::blur(int passes) {
     }
 
     // Restore GL state
-    _glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
+    _glBindFramebuffer(GL_READ_FRAMEBUFFER, saved_read_fbo);
+    _glBindFramebuffer(GL_DRAW_FRAMEBUFFER, saved_fbo);
     _glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
     _glUseProgram(saved_program);
     if (saved_scissor) _glEnable(0x0C11); else _glDisable(0x0C11); // GL_SCISSOR_TEST
+    restore_tex_state(tex_st);
 
     return s_ping_tex;
 }
@@ -520,6 +591,11 @@ unsigned int glass_blur::get_blurred_texture() {
 
 void glass_blur::draw_blur_background() {
     if (!s_initialized || !s_ping_tex || !s_display_program) return;
+    TexState tex_st = save_tex_state();
+    unsigned prev_program = (unsigned)get_int(0x8B8D); // GL_CURRENT_PROGRAM
+    int prev_vao = get_int(GL_VERTEX_ARRAY_BINDING);
+    int prev_depth = _glIsEnabled(0x0B71) ? 1 : 0; // GL_DEPTH_TEST (glIsEnabled only)
+
     _glDisable(GL_DEPTH_TEST);
     _glUseProgram(s_display_program);
     _glActiveTexture(GL_TEXTURE0);
@@ -527,9 +603,11 @@ void glass_blur::draw_blur_background() {
     _glUniform1i(_glGetUniformLocation(s_display_program, "uTexture"), 0);
     _glBindVertexArray(s_quad_vao);
     _glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-    _glBindVertexArray(0);
-    _glUseProgram(0);
-    _glEnable(GL_DEPTH_TEST);
+
+    _glBindVertexArray((unsigned)prev_vao);
+    _glUseProgram(prev_program);
+    if (prev_depth) _glEnable(0x0B71); else _glDisable(0x0B71);
+    restore_tex_state(tex_st);
 }
 
 void glass_blur::shutdown() {

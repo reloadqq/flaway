@@ -13,7 +13,7 @@ CXXFLAGS = -std=c++20 -Wall -O2 -fPIC -fvisibility=hidden -g -fno-omit-frame-poi
 
 # Link against concrete sonames so the build works without -dev symlinks,
 # and never against a newer glibc than the running system.
-LDLIBS = -ldl -l:libX11.so.6 -l:libXtst.so.6
+LDLIBS = -ldl -l:libX11.so.6 -l:libXtst.so.6 -lz
 
 # Source files (shared between Windows and Linux)
 SRCS = \
@@ -23,7 +23,13 @@ SRCS = \
     flaway/hooks/Hook.cpp \
     flaway/gui/GUI.cpp \
     flaway/gui/glass_blur.cpp \
+    flaway/gui/hud/hud_core.cpp \
+    flaway/gui/hud/hud_data.cpp \
+    flaway/gui/hud/hud_elements.cpp \
+    flaway/gui/hud/hud_icons.cpp \
+    flaway/gui/hud/hud_fx.cpp \
     flaway/utils/logger.cpp \
+    flaway/utils/rlog.cpp \
     flaway/modules/mace/mace.cpp \
     flaway/modules/shield_breaker/shield_breaker.cpp \
     flaway/modules/hitbox/hitbox.cpp \

@@ -41,9 +41,12 @@ volatile int g_phase = -1;
 // it raced the delta-JRE guard-page fault storm). Content is tiny (~40 bytes).
 static int g_crash_fd = -1;
 
-// Only record the FIRST real fault; during a fault storm the subsequent
-// intentional JVM faults must not touch the file (they're expected).
-static volatile sig_atomic_t g_crash_written = 0;
+// Record only the first few faults; during a fault storm the subsequent
+// intentional JVM faults must not flood the file (they're expected). The limit
+// is >1 because an early, recoverable fault (JVM implicit/guard-page hit) would
+// otherwise permanently mask the real crash we actually need to diagnose.
+static volatile sig_atomic_t g_crash_count = 0;
+static const int k_max_crashes = 4;
 
 struct sigaction g_prev[NSIG];
 bool g_prev_valid[NSIG] = {false};
@@ -59,15 +62,86 @@ static bool is_in_our_libs(uintptr_t pc)
     return false;
 }
 
+// Append the /proc/self/maps line covering each requested address, prefixed
+// with its tag (maps_fault= / maps_src= / maps_dst=). One pass over maps and
+// strictly async-signal-safe: open/read/write/snprintf only — no fopen, no
+// malloc. A raw fault address is useless on its own (ASLR); these lines say
+// WHAT the page is: heap chunk, thread-stack guard, PROT_NONE reservation,
+// file mapping — plus the mapping size, which tells us whether a 1MB copy
+// would still fit inside it.
+static void append_vmas(const uintptr_t addrs[3], const char* const tags[3])
+{
+    int mfd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+    if (mfd < 0)
+        return;
+    bool found[3] = {false, false, false};
+    char chunk[4096];
+    char line[512];
+    char out[640];
+    int llen = 0;
+    bool skip = false;
+    for (;;)
+    {
+        ssize_t r = read(mfd, chunk, sizeof(chunk));
+        if (r <= 0)
+            break;
+        for (ssize_t i = 0; i < r; i++)
+        {
+            char c = chunk[i];
+            if (skip) { if (c == '\n') skip = false; continue; }
+            if (c != '\n')
+            {
+                if (llen < (int)sizeof(line) - 1) line[llen++] = c;
+                else skip = true;
+                continue;
+            }
+            line[llen] = 0;
+            llen = 0;
+
+            uintptr_t s = 0, e = 0;
+            const char* p = line;
+            bool any = false;
+            while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))
+            { s = (s << 4) | (uintptr_t)(*p <= '9' ? *p - '0' : *p - 'a' + 10); p++; any = true; }
+            if (!any || *p != '-') continue;
+            p++;
+            e = 0;
+            any = false;
+            while ((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))
+            { e = (e << 4) | (uintptr_t)(*p <= '9' ? *p - '0' : *p - 'a' + 10); p++; any = true; }
+            if (!any) continue;
+
+            for (int k = 0; k < 3; k++)
+            {
+                if (found[k] || addrs[k] == 0 || addrs[k] < s || addrs[k] >= e)
+                    continue;
+                found[k] = true;
+                int n = snprintf(out, sizeof(out), "%s%s\n", tags[k], line);
+                if (n > 0)
+                    (void)write(g_crash_fd, out, (size_t)(n < (int)sizeof(out) ? n : (int)sizeof(out) - 1));
+            }
+            if (found[0] && found[1] && found[2]) { close(mfd); return; }
+        }
+    }
+    close(mfd);
+    for (int k = 0; k < 3; k++)
+        if (!found[k] && addrs[k])
+        {
+            int n = snprintf(out, sizeof(out), "%s<no-vma>\n", tags[k]);
+            if (n > 0)
+                (void)write(g_crash_fd, out, (size_t)(n < (int)sizeof(out) ? n : (int)sizeof(out) - 1));
+        }
+}
+
 static void dump_crash(int sig, siginfo_t* si, void* uc)
 {
     // Tiny async-signal-safe signature: signal, PC, fault address, teardown
     // phase, thread id. Only written on a real crash; this is the sole
     // client-side file produced by the cheat (regular logging stays removed).
     (void)uc;
-    if (g_crash_written || g_crash_fd < 0)
+    if (g_crash_count >= k_max_crashes || g_crash_fd < 0)
         return;
-    g_crash_written = 1;
+    g_crash_count = (sig_atomic_t)(g_crash_count + 1);
 
     uintptr_t pc = 0;
     ucontext_t* uctx = (ucontext_t*)uc;
@@ -83,15 +157,17 @@ static void dump_crash(int sig, siginfo_t* si, void* uc)
 
     // Key registers for crash triage. The most common failure here is a
     // memcpy/memmove/memset in the swap path, so log the classic copy args:
-    // rdi=dest, rsi=src, rdx=len (plus the address that actually faulted).
+    // rdi=dest, rsi=src, rdx=len (plus rbx, which glibc's AVX memcpy keeps as
+    // a copy of the length) and the address that actually faulted.
     // With these, a next crash identifies exactly which native buffer died.
-    uintptr_t reg_rdi = 0, reg_rsi = 0, reg_rdx = 0;
+    uintptr_t reg_rdi = 0, reg_rsi = 0, reg_rdx = 0, reg_rbx = 0;
     if (uctx)
     {
 #if defined(__x86_64__)
         reg_rdi = (uintptr_t)uctx->uc_mcontext.gregs[REG_RDI];
         reg_rsi = (uintptr_t)uctx->uc_mcontext.gregs[REG_RSI];
         reg_rdx = (uintptr_t)uctx->uc_mcontext.gregs[REG_RDX];
+        reg_rbx = (uintptr_t)uctx->uc_mcontext.gregs[REG_RBX];
 #else
         reg_rdi = (uintptr_t)uctx->uc_mcontext.gregs[REG_R0];
         reg_rsi = (uintptr_t)uctx->uc_mcontext.gregs[REG_R1];
@@ -99,7 +175,7 @@ static void dump_crash(int sig, siginfo_t* si, void* uc)
 #endif
     }
 
-    char buf[256];
+    char buf[384];
     // Attribute the crashing PC and the fault address to their owning library
     // (name + offset from the library load base). Without this the raw pc is
     // useless (ASLR randomizes every mapping per session). flaway.so base is
@@ -116,13 +192,21 @@ static void dump_crash(int sig, siginfo_t* si, void* uc)
         { ad_lib = g_ranges[i].name; ad_off = fault_addr - g_ranges[i].base; break; }
 
     int n = snprintf(buf, sizeof(buf),
-        "sig=%d pc=0x%lx in=%s+0x%lx fbase=0x%lx addr=0x%lx addr_in=%s+0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx phase=%d tid=%ld\n",
+        "sig=%d pc=0x%lx in=%s+0x%lx fbase=0x%lx addr=0x%lx addr_in=%s+0x%lx rdi=0x%lx rsi=0x%lx rdx=0x%lx rbx=0x%lx phase=%d tid=%ld\n",
         sig, (unsigned long)pc, in_lib, (unsigned long)in_off, (unsigned long)g_flaway_base,
         (unsigned long)fault_addr, ad_lib, (unsigned long)ad_off,
         (unsigned long)reg_rdi, (unsigned long)reg_rsi, (unsigned long)reg_rdx,
+        (unsigned long)reg_rbx,
         (int)g_phase, (long)syscall(SYS_gettid));
     if (n > 0)
         (void)write(g_crash_fd, buf, (size_t)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
+
+    // Identify the faulting page and the copy's src/dst regions.
+    {
+        const uintptr_t addrs[3] = { fault_addr, reg_rsi, reg_rdi };
+        const char* const tags[3] = { "maps_fault=", "maps_src=", "maps_dst=" };
+        append_vmas(addrs, tags);
+    }
 }
 
 static void signal_handler(int sig, siginfo_t* si, void* uc)

@@ -121,16 +121,39 @@ static bool handle_friend_command(const std::string& msg)
 	return true;
 }
 
+// ORIG_send_message belongs to the COPY of ChatScreen that jnihook creates
+// (net/minecraft/class_408_<uuid>), NOT to the real ChatScreen that `thiz` is
+// an instance of. A virtual call (CallVoidMethod) resolves it against
+// thiz's class, which lands back on the hooked native ChatScreen.sendMessage
+// -> infinite recursion -> StackOverflowError -> the pending exception was
+// then cleared, so the chat screen just closed and the message was dropped.
+// CallNonvirtualVoidMethod invokes the methodID itself (HotSpot
+// jni_invoke_nonstatic: `if (call_type != JNI_VIRTUAL) selected_method = m;`),
+// which runs the original bytecode with the real instance as `this`.
+static void call_original_send_message(JNIEnv* env, jobject thiz, jstring chatText, jboolean addToHistory)
+{
+	if (!env || !thiz || !ORIG_send_message || !g_chat_screen_class)
+		return;
+
+	env->CallNonvirtualVoidMethod(thiz, g_chat_screen_class, ORIG_send_message,
+		chatText, addToHistory);
+	if (env->ExceptionCheck())
+	{
+		// Never swallow this silently again: an exception here used to make
+		// the outgoing message vanish without a trace.
+		fprintf(stderr, "[chat_command] exception while forwarding sendMessage:\n");
+		fflush(stderr);
+		env->ExceptionDescribe();
+		env->ExceptionClear();
+	}
+}
+
 void hkSendMessage(JNIEnv* env, jobject thiz, jstring chatText, jboolean addToHistory)
 {
-	if (!chatText || !thiz)
-	{
-		if (ORIG_send_message && thiz)
-			env->CallVoidMethod(thiz, ORIG_send_message, chatText, addToHistory);
+	if (!thiz || !ORIG_send_message || !g_chat_screen_class)
 		return;
-	}
 
-	if (g_hooked)
+	if (g_hooked && chatText)
 	{
 		const char* utf = env->GetStringUTFChars(chatText, nullptr);
 		if (utf)
@@ -148,11 +171,7 @@ void hkSendMessage(JNIEnv* env, jobject thiz, jstring chatText, jboolean addToHi
 		}
 	}
 
-	if (ORIG_send_message)
-	{
-		env->CallVoidMethod(thiz, ORIG_send_message, chatText, addToHistory);
-		if (env->ExceptionCheck()) env->ExceptionClear();
-	}
+	call_original_send_message(env, thiz, chatText, addToHistory);
 }
 
 bool flaway::modules::chat_command::init()
@@ -202,19 +221,32 @@ bool flaway::modules::chat_command::init()
 		return false;
 	}
 
-	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkSendMessage), &ORIG_send_message);
-	if (result != JNIHOOK_OK)
+	// Create the global ref BEFORE the hook goes live so hkSendMessage can
+	// never observe a partially-initialised state.
+	g_chat_screen_class = reinterpret_cast<jclass>(env->NewGlobalRef(chat_screen_class));
+	if (!g_chat_screen_class)
 	{
-		fprintf(stderr, "[chat_command] JNIHook_Attach failed: %d\n", result); fflush(stderr);
+		fprintf(stderr, "[chat_command] NewGlobalRef(chat_screen_class) failed\n"); fflush(stderr);
 		env->DeleteLocalRef(chat_screen_class);
 		return false;
 	}
 
-	g_chat_screen_class = reinterpret_cast<jclass>(env->NewGlobalRef(chat_screen_class));
+	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkSendMessage), &ORIG_send_message);
+	if (result != JNIHOOK_OK || !ORIG_send_message)
+	{
+		fprintf(stderr, "[chat_command] JNIHook_Attach failed: %d orig=%p\n",
+			result, static_cast<void*>(ORIG_send_message)); fflush(stderr);
+		env->DeleteGlobalRef(g_chat_screen_class);
+		g_chat_screen_class = nullptr;
+		env->DeleteLocalRef(chat_screen_class);
+		return false;
+	}
+
 	env->DeleteLocalRef(chat_screen_class);
 
 	g_hooked = true;
-	fprintf(stderr, "[chat_command] ChatScreen.sendMessage hook installed successfully\n"); fflush(stderr);
+	fprintf(stderr, "[chat_command] ChatScreen.sendMessage hook installed (orig=%p)\n",
+		static_cast<void*>(ORIG_send_message)); fflush(stderr);
 	return true;
 }
 

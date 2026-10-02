@@ -7,7 +7,6 @@
 #include <sdk/minecraft/world/world.h>
 #include <sdk/minecraft/entity/entity.h>
 #include <sdk/classloader.h>
-#include <sdk/projection.h>
 #include <platform/linux/x11_helper.h>
 #include <cmath>
 #include <cstdlib>
@@ -191,7 +190,6 @@ static float g_prev_diff_yaw = 0.0f;
 static float g_prev_diff_pitch = 0.0f;
 static long long g_last_aim_us = 0;
 static long long g_target_acquire_us = 0;
-static long long g_engage_us = 0;
 static int g_reaction_frames = 0;
 static bool g_was_aiming = false;
 
@@ -317,59 +315,6 @@ struct axis_params
 	float micro_amp;
 };
 
-// Screen-space AABB of an entity's body box (the same box the ESP draws).
-// Returns false when the projection is not ready or the entity is behind
-// the camera, in which case the caller falls back to the angular check.
-static bool entity_screen_box(float ex, float base_y, float ez,
-	float& mnx, float& mxx, float& mny, float& mxy)
-{
-	flaway::projection::view_state& vs = flaway::projection::state();
-	if (!vs.valid) return false;
-
-	static const int corner[8][3] = {
-		{ -1, 0, -1 }, { 1, 0, -1 }, { -1, 1, -1 }, { 1, 1, -1 },
-		{ -1, 0,  1 }, { 1, 0,  1 }, { -1, 1,  1 }, { 1, 1,  1 },
-	};
-
-	mnx = 1.0e9f; mny = 1.0e9f;
-	mxx = -1.0e9f; mxy = -1.0e9f;
-	int valid = 0;
-	for (int i = 0; i < 8; i++)
-	{
-		float sx, sy;
-		float wx = ex + (float)corner[i][0] * 0.3f;
-		float wy = base_y + (float)corner[i][1] * 1.8f;
-		float wz = ez + (float)corner[i][2] * 0.3f;
-		if (!flaway::projection::world_to_screen(wx, wy, wz, sx, sy))
-			continue;
-		valid++;
-		if (sx < mnx) mnx = sx;
-		if (sx > mxx) mxx = sx;
-		if (sy < mny) mny = sy;
-		if (sy > mxy) mxy = sy;
-	}
-	return valid >= 4;
-}
-
-// Is the crosshair allowed to pull this entity? Either it sits near the
-// ESP box on screen (inside it, or within a margin around it), or it is
-// inside the configured angular FOV cone. This is what makes the aim work
-// even when the crosshair is still outside the box.
-static bool crosshair_reach(float ex, float base_y, float ez, float angle_dist)
-{
-	float mnx, mxx, mny, mxy;
-	if (entity_screen_box(ex, base_y, ez, mnx, mxx, mny, mxy))
-	{
-		const flaway::projection::view_state& vs = flaway::projection::state();
-		float margin = (float)std::min(vs.sw, vs.sh) * 0.12f;
-		float cx = vs.half_w, cy = vs.half_h;
-		if (cx >= mnx - margin && cx <= mxx + margin &&
-			cy >= mny - margin && cy <= mxy + margin)
-			return true;
-	}
-	return angle_dist < globals::aimassist_fov;
-}
-
 static float compute_axis(float diff, float dt, const axis_params& p,
 	float& velocity, float& prev_diff)
 {
@@ -463,32 +408,17 @@ static void apply_smooth_rotation()
 	// Randomized factor prevents constant-ratio geometric decay.
 	// 0.20..0.40 (was 0.14..0.30): the view closes on the goal faster right
 	// after a lock while staying proportional, so it still cannot overshoot.
-	// Ramp-in after a new target is picked: for the first ~450 ms the turn
-	// starts slow and speeds up, so the view is never thrown onto another
-	// target in one sharp motion.
-	float engage_ramp = 1.0f;
-	if (g_engage_us > 0)
-	{
-		long long el = now - g_engage_us;
-		if (el >= 0 && el < 450000LL)
-			engage_ramp = 0.30f + 0.70f * (float)((double)el / 450000.0);
-	}
-
 	float factor = 0.20f + 0.20f * (float)(std::rand() % 1000) / 1000.0f;
-	factor *= engage_ramp;
 	float step_y = dy * factor * dt;
-	// Pitch is deliberately the slow, smooth axis: humans move the view far
-	// less aggressively vertically, and sharp Y deltas are what trips
-	// rotation checks.
-	float step_p = dp * factor * 0.55f * dt;
+	float step_p = dp * factor * dt;
 
 	// Dynamic caps: higher base caps when the error is large so the aim
 	// can actually track a speed-boosted target without being throttled.
 	// At small errors, use tight caps for precision.
-	float cap_y = 1.8f * dt * engage_ramp;
-	float cap_p = 0.8f * dt * engage_ramp;
+	float cap_y = 1.8f * dt;
+	float cap_p = 1.2f * dt;
 	if (std::abs(dy) > 8.0f) cap_y = std::min(std::abs(dy) * 0.6f, 6.0f) * dt;
-	if (std::abs(dp) > 5.0f) cap_p = std::min(std::abs(dp) * 0.4f, 2.0f) * dt;
+	if (std::abs(dp) > 5.0f) cap_p = std::min(std::abs(dp) * 0.55f, 3.5f) * dt;
 	if (step_y > cap_y) step_y = cap_y;
 	if (step_y < -cap_y) step_y = -cap_y;
 	if (step_p > cap_p) step_p = cap_p;
@@ -509,18 +439,17 @@ static void apply_smooth_rotation()
 		if (std::abs(dy) > 0.02f || std::abs(dp) > 0.02f)
 		{
 			float micro = 0.03f + 0.12f * (float)(std::rand() % 1000) / 1000.0f;
-			float micro_p = micro * 0.5f;
 			if (std::rand() % 2)
 			{
 				if (globals::aimassist_horizontal)
 					lc.set_yaw(wrap_angle(cy + micro));
 				else
-					lc.set_pitch(cp + micro_p < -89.0f ? -89.0f : (cp + micro_p > 89.0f ? 89.0f : cp + micro_p));
+					lc.set_pitch(cp + micro < -89.0f ? -89.0f : (cp + micro > 89.0f ? 89.0f : cp + micro));
 			}
 			else
 			{
 				if (globals::aimassist_vertical)
-					lc.set_pitch(cp - micro_p < -89.0f ? -89.0f : (cp - micro_p > 89.0f ? 89.0f : cp - micro_p));
+					lc.set_pitch(cp - micro < -89.0f ? -89.0f : (cp - micro > 89.0f ? 89.0f : cp - micro));
 				else
 					lc.set_yaw(wrap_angle(cy - micro));
 			}
@@ -547,9 +476,9 @@ static void apply_smooth_rotation()
 	}
 	if (send_p)
 	{
-		out_p = pend_p + tail * 0.5f;
-		if (out_p > 4.0f) out_p = 4.0f;
-		if (out_p < -4.0f) out_p = -4.0f;
+		out_p = pend_p + tail;
+		if (out_p > 7.0f) out_p = 7.0f;
+		if (out_p < -7.0f) out_p = -7.0f;
 		if (out_p > -0.02f && out_p < 0.02f) out_p = out_p >= 0.0f ? 0.02f : -0.02f;
 		pend_p = 0.0f;
 	}
@@ -611,16 +540,16 @@ static void do_return_step()
 
 	float factor = 0.18f + 0.12f * (float)(std::rand() % 1000) / 1000.0f;
 	float step_y = dy * factor * dt;
-	float step_p = dp * factor * 0.55f * dt;
+	float step_p = dp * factor * dt;
 	float cap_y = 1.8f * dt;
-	float cap_p = 0.8f * dt;
+	float cap_p = 1.2f * dt;
 	if (step_y > cap_y) step_y = cap_y;
 	if (step_y < -cap_y) step_y = -cap_y;
 	if (step_p > cap_p) step_p = cap_p;
 	if (step_p < -cap_p) step_p = -cap_p;
 
 	step_y += ((float)(std::rand() % 1999) - 999.0f) / 1000.0f * 0.012f;
-	step_p += ((float)(std::rand() % 1999) - 999.0f) / 1000.0f * 0.005f;
+	step_p += ((float)(std::rand() % 1999) - 999.0f) / 1000.0f * 0.009f;
 
 	lc.set_yaw(wrap_angle(cy + step_y));
 	lc.set_pitch(cp + step_p < -89.0f ? -89.0f : (cp + step_p > 89.0f ? 89.0f : cp + step_p));
@@ -719,16 +648,7 @@ void flaway::modules::aimassist::run()
 	// ----- Target selection with persistence -----
 	jobject best = nullptr;
 	int best_id = -1;
-	// Score threshold: eligibility is decided per candidate (screen-space
-	// ESP box reach OR the angular FOV cone), so the score itself starts
-	// unbounded instead of being capped by the FOV value.
-	float best_angle = 1.0e9f;
-	// The entity we are already locked on: captured separately so it can be
-	// held instead of swapping to a fresher candidate.
-	jobject held_obj = nullptr;
-	double held_dist = 0.0;
-	float held_angle = 0.0f;
-	bool held_reach = false;
+	float best_angle = globals::aimassist_fov;
 
 	for (jobject p : players)
 	{
@@ -736,15 +656,11 @@ void flaway::modules::aimassist::run()
 		sdk::entity_client ec(p);
 		if (ec.is_same_object(player)) continue;
 
-		int eid = ec.get_entity_id();
-		bool held = (g_locked_id != -1 && eid == g_locked_id);
-
 		double ex = ec.get_x();
-		float base_y = (float)ec.get_y();
-		double ey = base_y + 1.62;
+		double ey = ec.get_y() + 1.62;
 		double ez = ec.get_z();
 		double dist = std::sqrt((ex - px) * (ex - px) + (ey - py) * (ey - py) + (ez - pz) * (ez - pz));
-		if (dist > globals::aimassist_max_distance && !held) continue;
+		if (dist > globals::aimassist_max_distance) continue;
 
 		float target_yaw, target_pitch;
 		angles_to_target(px, py, pz, ex, ey, ez, target_yaw, target_pitch);
@@ -752,21 +668,12 @@ void flaway::modules::aimassist::run()
 		float dpitch = std::abs(calc_angle_diff(current_pitch, target_pitch));
 		float angle_dist = std::sqrt(dyaw * dyaw + dpitch * dpitch);
 
-		bool reach = crosshair_reach((float)ex, base_y, (float)ez, angle_dist);
-
-		if (held)
-		{
-			held_obj = p;
-			held_dist = dist;
-			held_angle = angle_dist;
-			held_reach = reach;
-		}
-
+		int eid = ec.get_entity_id();
 		float score = angle_dist;
-		if (held)
+		if (eid == g_locked_id && g_locked_id != -1)
 			score *= 0.45f;
 
-		if ((reach || held) && score < best_angle)
+		if (score < best_angle)
 		{
 			best_angle = score;
 			best = p;
@@ -780,15 +687,11 @@ void flaway::modules::aimassist::run()
 		sdk::entity_client ec(m);
 		if (ec.is_same_object(player)) continue;
 
-		int eid = ec.get_entity_id();
-		bool held = (g_locked_id != -1 && eid == g_locked_id);
-
 		double ex = ec.get_x();
-		float base_y = (float)ec.get_y();
-		double ey = base_y + 1.0;
+		double ey = ec.get_y() + 1.0;
 		double ez = ec.get_z();
 		double dist = std::sqrt((ex - px) * (ex - px) + (ey - py) * (ey - py) + (ez - pz) * (ez - pz));
-		if (dist > globals::aimassist_max_distance && !held) continue;
+		if (dist > globals::aimassist_max_distance) continue;
 
 		float target_yaw, target_pitch;
 		angles_to_target(px, py, pz, ex, ey, ez, target_yaw, target_pitch);
@@ -796,50 +699,16 @@ void flaway::modules::aimassist::run()
 		float dpitch = std::abs(calc_angle_diff(current_pitch, target_pitch));
 		float angle_dist = std::sqrt(dyaw * dyaw + dpitch * dpitch);
 
-		bool reach = crosshair_reach((float)ex, base_y, (float)ez, angle_dist);
-
-		if (held)
-		{
-			held_obj = m;
-			held_dist = dist;
-			held_angle = angle_dist;
-			held_reach = reach;
-		}
-
+		int eid = ec.get_entity_id();
 		float score = angle_dist;
-		if (held)
+		if (eid == g_locked_id && g_locked_id != -1)
 			score *= 0.45f;
 
-		if ((reach || held) && score < best_angle)
+		if (score < best_angle)
 		{
 			best_angle = score;
 			best = m;
 			best_id = eid;
-		}
-	}
-
-	// ----- No mid-fight target swapping -----
-	// While a target is locked the aim stays on that entity even if another
-	// one drifts closer to the crosshair: instant target swaps are a
-	// detection signal. The lock only goes away through the normal lost /
-	// grace path below (or when the target leaves reach or the FOV cone).
-	if (g_locked_id != -1)
-	{
-		// Held target must still be reachable: near its ESP box on screen, or
-		// (when the projection is not ready) within a wide angular cone.
-		bool held_ok = held_reach ||
-			held_angle <= globals::aimassist_fov * 3.0f;
-		if (held_obj &&
-			held_dist <= globals::aimassist_max_distance &&
-			held_ok)
-		{
-			best = held_obj;
-			best_id = g_locked_id;
-		}
-		else
-		{
-			best = nullptr;
-			best_id = -1;
 		}
 	}
 
@@ -959,7 +828,6 @@ void flaway::modules::aimassist::run()
 		g_locked_id = best_id;
 		g_reaction_frames = 0;
 		g_target_acquire_us = now_us();
-		g_engage_us = g_target_acquire_us;
 		g_velocity_yaw = 0.0f;
 		g_velocity_pitch = 0.0f;
 		g_prev_diff_yaw = 0.0f;
@@ -1098,13 +966,11 @@ void flaway::modules::aimassist::run()
 	yaw_params.micro_amp = k_micro_jitter * speed_factor;
 
 	axis_params pitch_params;
-	// Y axis kept soft: slower ramp, lower top speed and much less random
-	// micro-noise than yaw, so vertical deltas stay human-shaped.
-	pitch_params.accel = 400.0f * speed_factor;
-	pitch_params.max_vel = 95.0f;
+	pitch_params.accel = 560.0f * speed_factor;
+	pitch_params.max_vel = 140.0f;
 	pitch_params.damping = 8.0f * (1.0f - k_overshoot_correction * 0.5f);
 	pitch_params.deadzone = k_pitch_deadzone;
-	pitch_params.micro_amp = k_micro_jitter * speed_factor * 0.35f;
+	pitch_params.micro_amp = k_micro_jitter * speed_factor * 0.7f;
 
 	// ----- Compute aim adjustments -----
 	float yaw_move = 0.0f;

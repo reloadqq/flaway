@@ -19,6 +19,7 @@
 #include "../modules/modules.h"
 #include "../gui/glass_blur.h"
 #include "flaway/utils/no_log.h"
+#include "flaway/utils/rlog.h"
 #include <link.h>
 
 static int s_hook_diag_fd = -1;
@@ -34,6 +35,9 @@ static void diag(const char* msg) {
         write(s_hook_diag_fd, msg, strlen(msg));
         write(s_hook_diag_fd, "\n", 1);
     }
+    // Mirror every hook-side action into the render log so one file tells the
+    // whole story (see flaway/utils/rlog.h).
+    rlog::logf("diag: %s", msg);
 }
 
 namespace x11_helper {
@@ -280,6 +284,8 @@ namespace linux_hook {
 					GUI::cancel_keybind_capture();
 				}
 				fprintf(stderr, "[DEBUG] GUI toggle: %d\n", (int)globals::show_gui);
+				rlog::logf("hook: keybind TOGGLE -> show_gui=%d (cursor %s)",
+				           (int)globals::show_gui, globals::show_gui ? "released" : "recaptured");
 			} else {
 				// Lazy init is not finished (or failed earlier and needs a retry).
 				// Re-assert init_needed unconditionally so a stuck "pending init"
@@ -362,17 +368,31 @@ namespace linux_hook {
             }
             if (w > 0 && h > 0) {
                 static int s_render_diag = 0;
+                static int s_lw = -1, s_lh = -1;
+                static int s_last_returned = -1;
                 if (s_render_diag < 5) {
                     char buf[128];
                     snprintf(buf, sizeof(buf), "[7] render w=%d h=%d x11=%d", w, h, (int)g_have_minecraft_x11);
                     diag(buf);
                     s_render_diag++;
                 }
+                if (w != s_lw || h != s_lh) {
+                    rlog::logf("hook: window %dx%d (x11=%d)", w, h, (int)g_have_minecraft_x11);
+                    s_lw = w; s_lh = h;
+                }
+                rlog::gl_drain("hook.before_GUI_render");
                 bool rendered = GUI::render(w, h);
-                if (s_render_diag <= 5) {
+                if ((int)rendered != s_last_returned) {
+                    rlog::logf("hook: GUI::render -> %d%s", (int)rendered,
+                               rendered ? "" : " (nothing drawn)");
+                    s_last_returned = (int)rendered;
+                }
+                static int s_return_diag = 0;
+                if (s_return_diag < 5) {
                     char buf[64];
                     snprintf(buf, sizeof(buf), "[8] GUI::render returned %d", (int)rendered);
                     diag(buf);
+                    s_return_diag++;
                 }
                 return rendered;
             }

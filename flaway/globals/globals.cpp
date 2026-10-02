@@ -170,12 +170,23 @@ namespace globals
     bool hud_keybinds_enabled = false;
     bool hud_pickups_enabled = false;
     bool hud_poison_enabled = false;
+    bool hud_arraylist_enabled = false;
     float hud_scale = 1.0f;
-    float hud_watermark_pos[2] = { -1.0f, -1.0f };
-    float hud_keybinds_pos[2] = { -1.0f, -1.0f };
-    float hud_target_pos[2] = { -1.0f, -1.0f };
-    float hud_coords_pos[2] = { -1.0f, -1.0f };
-    float hud_pickups_pos[2] = { -1.0f, -1.0f };
+    // Default position for every element: top-left corner stack (12,12).
+    float hud_watermark_pos[2] = { 12.0f, 12.0f };
+    float hud_keybinds_pos[2] = { 12.0f, 12.0f };
+    float hud_target_pos[2] = { 12.0f, 12.0f };
+    float hud_coords_pos[2] = { 12.0f, 12.0f };
+    float hud_pickups_pos[2] = { 12.0f, 12.0f };
+    float hud_poison_pos[2] = { 12.0f, 12.0f };
+    float hud_arraylist_pos[2] = { 12.0f, 12.0f };
+    float hud_watermark_scale = 1.0f;
+    float hud_keybinds_scale = 1.0f;
+    float hud_target_scale = 1.0f;
+    float hud_coords_scale = 1.0f;
+    float hud_pickups_scale = 1.0f;
+    float hud_poison_scale = 1.0f;
+    float hud_arraylist_scale = 1.0f;
 
     int theme_id = 0;
     bool gui_background_gradient = true;

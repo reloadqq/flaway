@@ -223,13 +223,24 @@ namespace globals
     extern bool hud_keybinds_enabled;
     extern bool hud_pickups_enabled;
     extern bool hud_poison_enabled;
+    extern bool hud_arraylist_enabled;
     extern float hud_scale;
-    // HUD element positions (pixels, -1 = auto/default). Draggable while T held.
+    // HUD element positions (pixels, <0 = default 12,12). Draggable while chat is open (edit mode).
     extern float hud_watermark_pos[2];
     extern float hud_keybinds_pos[2];
     extern float hud_target_pos[2];
     extern float hud_coords_pos[2];
     extern float hud_pickups_pos[2];
+    extern float hud_poison_pos[2];
+    extern float hud_arraylist_pos[2];
+    // Per-element scale (multiplied by hud_scale).
+    extern float hud_watermark_scale;
+    extern float hud_keybinds_scale;
+    extern float hud_target_scale;
+    extern float hud_coords_scale;
+    extern float hud_pickups_scale;
+    extern float hud_poison_scale;
+    extern float hud_arraylist_scale;
 
     // GUI theme
     extern int theme_id;

@@ -2,6 +2,7 @@
 #include "entity.h"
 #include <sdk/classloader.h>
 #include <sdk/mappings/mappings.hpp>
+#include <flaway/utils/rlog.h>
 
 // Cached JNI ids for the Entity class. Method/field ids stay valid for the
 // lifetime of the class, so we resolve them once and reuse them every frame
@@ -81,18 +82,21 @@ namespace
 
 		bool init(JNIEnv* env)
 		{
-			if (living_cls && effects_cls) return true;
+			if (living_cls && effects_cls && has_status_effect) return true;
 
-			jclass le = sdk::classloader::find_class(env, sdk::mappings::living_entity_class_sig);
-			if (!le) return false;
-			living_cls = (jclass)env->NewGlobalRef(le);
-			env->DeleteLocalRef(le);
-			if (!living_cls) return false;
-
-			has_status_effect = env->GetMethodID(living_cls,
-				sdk::mappings::living_entity_has_status_effect_name,
-				sdk::mappings::living_entity_has_status_effect_sig);
-			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (!living_cls) {
+				jclass le = sdk::classloader::find_class(env, sdk::mappings::living_entity_class_sig);
+				if (!le) return false;
+				living_cls = (jclass)env->NewGlobalRef(le);
+				env->DeleteLocalRef(le);
+				if (!living_cls) return false;
+			}
+			if (!has_status_effect) {
+				has_status_effect = env->GetMethodID(living_cls,
+					sdk::mappings::living_entity_has_status_effect_name,
+					sdk::mappings::living_entity_has_status_effect_sig);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+			}
 
 			// resolved lazily (StatusEffects may load after the entity class)
 			jclass fx = sdk::classloader::find_class(env, sdk::mappings::status_effects_class_sig);
@@ -350,7 +354,16 @@ bool sdk::entity_client::has_poison()
 {
 	auto env = flaway::instance->get_env();
 	if (!env || !entity) return false;
-	if (!ensure_status(env) || !g_status.has_status_effect) return false;
+	if (!ensure_status(env) || !g_status.has_status_effect) {
+		static bool s_logged = false;
+		if (!s_logged) {
+			s_logged = true;
+			rlog::logf("hud: status effect JNI unavailable (method=%d effects=%d poison=%d)",
+			           g_status.has_status_effect != nullptr,
+			           g_status.effects_cls != nullptr, g_status.poison != nullptr);
+		}
+		return false;
+	}
 
 	jobject registry_entry = env->GetStaticObjectField(g_status.effects_cls, g_status.poison);
 	if (env->ExceptionCheck()) env->ExceptionClear();

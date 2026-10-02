@@ -1,5 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <string>
+
+struct ImFont;
 
 namespace GUI {
     bool init();
@@ -20,4 +23,11 @@ namespace GUI {
     unsigned int text_faint();
     unsigned int border_color();
     unsigned int card_color();
+
+    // HUD fonts (Monocraft regular/bold, 15px)
+    ImFont* font_hud();
+    ImFont* font_hud_bold();
+
+    // Key code -> display name ("RShift", "F6", ...; "—" for none)
+    std::string key_name(int key);
 }

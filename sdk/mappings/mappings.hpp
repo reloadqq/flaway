@@ -575,6 +575,26 @@ namespace sdk
 		inline constexpr const char* chat_screen_send_message_name = "method_44056";
 		inline constexpr const char* chat_screen_send_message_sig = "(Ljava/lang/String;Z)V";
 
+		// --- HUD (flaway/gui/hud) — verified against Yarn 1.21.10 mappings ---
+		// MinecraftClient.isHudEnabled() — F1 vanilla HUD toggle
+		inline constexpr const char* hud_is_hud_enabled_name = "method_1498";
+		inline constexpr const char* hud_is_hud_enabled_sig = "()Z";
+		// MinecraftClient.getCurrentServerEntry() -> ServerInfo (class_642), null in singleplayer
+		inline constexpr const char* current_server_entry_name = "method_1558";
+		inline constexpr const char* current_server_entry_sig = "()Lnet/minecraft/class_642;";
+		inline constexpr const char* server_info_class_sig = "net/minecraft/class_642";
+		inline constexpr const char* server_info_address_name = "field_3761";
+		inline constexpr const char* server_info_address_sig = "Ljava/lang/String;";
+		// ClientPlayNetworkHandler (class_634).getPlayerListEntry(String) -> PlayerListEntry (class_640)
+		inline constexpr const char* player_list_entry_class_sig = "net/minecraft/class_640";
+		inline constexpr const char* network_get_entry_by_name_name = "method_2874";
+		inline constexpr const char* network_get_entry_by_name_sig = "(Ljava/lang/String;)Lnet/minecraft/class_640;";
+		// PlayerListEntry.getLatency() / getProfile()
+		inline constexpr const char* entry_get_latency_name = "method_2959";
+		inline constexpr const char* entry_get_latency_sig = "()I";
+		inline constexpr const char* entry_get_profile_name = "method_2966";
+		inline constexpr const char* entry_get_profile_sig = "()Lcom/mojang/authlib/GameProfile;";
+
 	}
 };
 

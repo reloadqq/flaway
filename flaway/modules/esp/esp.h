@@ -37,6 +37,7 @@ struct esp_pickup_entry
     std::string name;
     unsigned char icon_r, icon_g, icon_b;
     long long time_us;
+    std::string tex;   // vanilla texture suffix ("" = no texture, use icon color)
 };
 
 struct esp_smooth_state
@@ -51,6 +52,7 @@ struct esp_item_slot
     std::string name;
     unsigned char icon_r = 88, icon_g = 140, icon_b = 255;
     int count = 0;
+    std::string tex;   // vanilla texture suffix ("" = no texture, use icon color)
 };
 
 struct esp_render_entry

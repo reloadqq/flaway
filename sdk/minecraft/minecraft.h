@@ -2,6 +2,8 @@
 
 #include <sdk/includes.h>
 
+#include <string>
+
 namespace sdk
 {
 	struct camera_data
@@ -25,6 +27,9 @@ namespace sdk
 		bool do_attack();
 		jobject get_interaction_manager();
 		jobject get_network_handler();
+		// "host:port" of the multiplayer server the player is on, empty when
+		// no server is joined (main menu, singleplayer).
+		std::string get_current_server();
 		float get_fov();
 		camera_data get_camera();
 		// True when any Minecraft screen (inventory, Escape menu, etc.) is open.

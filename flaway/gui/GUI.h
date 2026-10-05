@@ -16,6 +16,10 @@ namespace GUI {
     // Theme color accessors (shared with HUD / ESP rendering)
     unsigned int accent_a();
     unsigned int accent_b();
+    // Active gradient preset (Ocean/Sunset/Fire/Forest). Returns false when no
+    // preset is selected and the caller should derive the gradient from
+    // accent_a() instead.
+    bool gradient_pair(unsigned int* a, unsigned int* b);
     unsigned int sidebar_a();
     unsigned int sidebar_b();
     unsigned int text_primary();

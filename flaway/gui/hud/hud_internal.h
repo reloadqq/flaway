@@ -97,7 +97,8 @@ void rolling_text(ImDrawList* dl, ImFont* font, float size, const ImVec2& p,
 // ---------------------------------------------------------------------------
 namespace hud_fx {
 
-// Reset the per-frame request queue (call at the top of every HUD frame).
+// Reset the per-frame request queue. Frame-guarded: only the first call of a
+// given ImGui frame clears the queue, so ESP/HUD/menu can all call it safely.
 void begin_frame();
 
 // Effect ids for fx()/sheen().
@@ -157,6 +158,7 @@ namespace hud_icons {
 
 unsigned item(const std::string& suffix);      // item/<suffix>.png or block/<suffix>.png
 unsigned skin(const std::string& hash);        // full 64x64 skin texture
+unsigned png(const unsigned char* data, size_t len);  // embedded PNG byte array
 void shutdown();
 
 } // namespace hud_icons

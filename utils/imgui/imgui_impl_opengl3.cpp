@@ -440,8 +440,16 @@ static void ImGui_ImplOpenGL3_SetupRenderState(ImDrawData* draw_data, int fb_wid
 #if defined(GL_CLIP_ORIGIN)
     if (!clip_origin_lower_left) { float tmp = T; T = B; B = tmp; } // Swap top and bottom if origin is upper left
 #endif
-    rlog::logf("gl: SetupRenderState viewport=(0,0 %dx%d) ortho L=%.0f R=%.0f T=%.0f B=%.0f",
-               fb_width, fb_height, (double)L, (double)R, (double)T, (double)B);
+    {   // only log when the projection actually changes (this runs every frame)
+        static int s_lw = -1, s_lh = -1;
+        static float s_ll = 0.0f, s_lr = 0.0f, s_lt = 0.0f, s_lb = 0.0f;
+        if (fb_width != s_lw || fb_height != s_lh || L != s_ll || R != s_lr ||
+            T != s_lt || B != s_lb) {
+            s_lw = fb_width; s_lh = fb_height; s_ll = L; s_lr = R; s_lt = T; s_lb = B;
+            rlog::logf("gl: SetupRenderState viewport=(0,0 %dx%d) ortho L=%.0f R=%.0f T=%.0f B=%.0f",
+                       fb_width, fb_height, (double)L, (double)R, (double)T, (double)B);
+        }
+    }
     const float ortho_projection[4][4] =
     {
         { 2.0f/(R-L),   0.0f,         0.0f,   0.0f },

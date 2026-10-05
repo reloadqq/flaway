@@ -251,7 +251,7 @@ static bool check_fbo(unsigned fbo) {
 // --- state save/restore -----------------------------------------------------
 // This context belongs to the game: everything we touch has to come back
 // exactly as we found it (Minecraft/Sodium may cache some of it).
-static const unsigned GL_ACTIVE_TEXTURE = 0x84C0;
+static const unsigned GL_ACTIVE_TEXTURE = 0x84E0; // GL_ACTIVE_TEXTURE (0x84E0, NOT 0x84C0 = GL_TEXTURE0)
 static const unsigned GL_TEXTURE_BINDING_2D = 0x806A;
 static const unsigned GL_VERTEX_ARRAY_BINDING = 0x85B5;
 static const unsigned GL_ARRAY_BUFFER_BINDING = 0x8894;
@@ -415,7 +415,11 @@ static void setup_quad() {
          1.0f,  1.0f,  1.0f, 1.0f,
         -1.0f,  1.0f,  0.0f, 1.0f,
     };
+    // Runs during the ImGui build pass, outside RenderDrawData's state
+    // backup: restore BOTH bindings or the game keeps drawing with VAO 0
+    // (Sodium caches it) and the world comes out black.
     int prev_array_buf = get_int(GL_ARRAY_BUFFER_BINDING);
+    int prev_vao = get_int(GL_VERTEX_ARRAY_BINDING);
     _glGenVertexArrays(1, &s_quad_vao);
     _glBindVertexArray(s_quad_vao);
     _glGenBuffers(1, &s_quad_vbo);
@@ -425,7 +429,7 @@ static void setup_quad() {
     _glVertexAttribPointer(0, 2, GL_FLOAT, false, 4 * sizeof(float), (void*)0);
     _glEnableVertexAttribArray(1);
     _glVertexAttribPointer(1, 2, GL_FLOAT, false, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    _glBindVertexArray(0);
+    _glBindVertexArray((unsigned)prev_vao);
     _glBindBuffer(GL_ARRAY_BUFFER, (unsigned)prev_array_buf);
 }
 

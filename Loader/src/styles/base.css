@@ -1,0 +1,156 @@
+@font-face {
+    font-family: Monocraft;
+    src: url("/Monocraft.woff2") format("woff2");
+}
+
+:root {
+    --accent: #a875ff;
+    --accent2: #6b35ff;
+    --rgb: 168,117,255;
+
+    --bg: #060609;
+    --text: #f5f5f7;
+    --muted: #858591;
+
+    --glass: rgba(17,17,24,.62);
+    --glass-light: rgba(255,255,255,.055);
+    --border: rgba(255,255,255,.085);
+
+    --mx: 50%;
+    --my: 50%;
+
+    --transition: .35s cubic-bezier(.2,.8,.2,1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: Monocraft, monospace;
+}
+
+/* =========================================================
+   BACKGROUND
+========================================================= */
+
+.background {
+    position: fixed;
+    inset: -55px;
+    z-index: -10;
+
+    background:
+        linear-gradient(
+            rgba(3,3,7,.64),
+            rgba(3,3,7,.9)
+        ),
+        url("/background.jpg") center / cover no-repeat;
+
+    filter: blur(12px) saturate(.82);
+
+    transform:
+        translate3d(
+            calc((var(--mx) - 50%) * .055),
+            calc((var(--my) - 50%) * .055),
+            0
+        )
+        scale(1.09);
+
+    will-change: transform;
+}
+
+.background::after {
+    content: "";
+
+    position: absolute;
+    inset: 0;
+
+    background:
+        radial-gradient(
+            circle at 50% 45%,
+            rgba(var(--rgb),.13),
+            transparent 40%
+        ),
+        radial-gradient(
+            circle at 5% 95%,
+            rgba(var(--rgb),.07),
+            transparent 28%
+        );
+
+    transition: background 1.1s ease;
+}
+
+/* =========================================================
+   LIQUID BLOBS
+========================================================= */
+
+.blob {
+    position: fixed;
+    pointer-events: none;
+    z-index: -5;
+
+    border-radius: 50%;
+
+    background: var(--accent);
+    opacity: .13;
+
+    filter: blur(85px);
+
+    will-change: transform;
+
+    animation:
+        blobMove 13s ease-in-out infinite alternate;
+}
+
+.blob.one {
+    width: 330px;
+    height: 330px;
+    top: -110px;
+    left: 13%;
+}
+
+.blob.two {
+    width: 280px;
+    height: 280px;
+    right: 4%;
+    bottom: -100px;
+    animation-delay: -5s;
+}
+
+@keyframes blobMove {
+    from {
+        transform: translate3d(-25px,-15px,0) scale(1);
+    }
+
+    to {
+        transform: translate3d(30px,25px,0) scale(1.15);
+    }
+}
+
+/* =========================================================
+   NOISE
+========================================================= */
+
+.noise {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+
+    pointer-events: none;
+
+    opacity: .022;
+
+    background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}

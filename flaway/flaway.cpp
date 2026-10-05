@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <atomic>
 #include "flaway/utils/no_log.h"
+#include "flaway/utils/discord_rpc.h"
 
 flaway::instance_t* flaway::instance = nullptr;
 flaway::instance_t flaway::g_instance; // zero-initialized .bss
@@ -116,6 +117,13 @@ bool flaway::instance_t::init(JNIEnv* jenv)
             flaway::modules::chat_command::init();
 
             initialized = true;
+
+            // Injected: bring the Discord Rich Presence up with the client.
+            // Runs on the first frame, so nothing touches JNI/sockets before
+            // the game threads are live again. Only reached once the client
+            // is up — the presence must never exist without a live client.
+            discord_rpc::start();
+
         } catch (std::exception& e) {
             fprintf(stderr, "[FLAWAY] init exception: %s\n", e.what()); fflush(stderr);
             sdk::instance.reset();
@@ -138,6 +146,9 @@ void flaway::instance_t::shutdown()
     try {
 
     logger::log("[flaway] shutting down");
+    // Drop the Discord presence before anything else so the status line does
+    // not keep showing the game after the client is gone.
+    discord_rpc::stop();
     flaway::config::save_auto();
 
     // Gate the render thread before tearing down modules. Without this,
@@ -244,6 +255,13 @@ void flaway::instance_t::unhook_all()
     // (find_class / re-init) while we are destroying them.
     logger::log("[flaway] unhook: set_unhooked");
     Hook::set_unhooked(true);
+
+    // Clear the Discord Rich Presence right away: the worker is joined here,
+    // so when this returns Discord no longer shows anything about the game.
+    // Must run after set_unhooked so a concurrent frame tick() (which bails
+    // on get_unhooked) can not restart it behind our back.
+    logger::log("[flaway] unhook: stopping discord rpc");
+    discord_rpc::stop();
 
     // CRITICAL: release mtx BEFORE waiting for the render thread. The render
     // thread is mid-MainHook->run_all right now and calls get_env() (which

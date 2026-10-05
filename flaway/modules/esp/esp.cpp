@@ -2,6 +2,8 @@
 #include "../../flaway.h"
 #include "../../globals/globals.h"
 #include "../../gui/GUI.h"
+#include "../../gui/hud/hud_internal.h"
+#include "../../gui/data/pointer_png.h"
 #include "../../utils/logger.h"
 #include "../nametag_hook/nametag_hook.h"
 #include "../aimassist/aimassist.h"
@@ -27,16 +29,244 @@
 #define M_PI 3.14159265358979323846
 #endif
 static std::unordered_map<int, esp_render_entry> g_players; static std::unordered_map<int, esp_render_entry> g_items; static esp_camera_data esp_cam; static std::mutex esp_mutex; static std::deque<esp_pickup_entry> g_pickups; static jobject g_last_world = nullptr; static std::map<int, std::string> g_name_cache; static std::map<int, std::string> g_item_name_cache; static int g_frame_count = 0; struct entity_scan_cache { long long ts = 0; double bxmin = 0, bymin = 0, bzmin = 0; double bxmax = 0, bymax = 0, bzmax = 0; float health = 20.0f, max_health = 20.0f; int hurt_time = 0; }; static std::unordered_map<int,
-entity_scan_cache> g_scan_cache; static constexpr long long k_scan_interval_us = 200000; static constexpr long long k_fade_in_us = 120000; static constexpr long long k_grace_us = 400000; static constexpr long long k_fade_out_us = 500000; static const ImU32 plate_bg_b = IM_COL32(15, 17, 22, 235); static const ImU32 plate_border = IM_COL32(48, 52, 66, 255); static const ImU32 plate_accent = IM_COL32(88, 140, 255, 200); static const ImU32 plate_accent_hi = IM_COL32(140, 180, 255, 255); static const ImU32 plate_text = IM_COL32(235, 239, 245, 255); static inline int col_r(ImU32 c) { return (int)((
-c >> IM_COL32_R_SHIFT) & 0xFF); } static inline int col_g(ImU32 c) { return (int)((c >> IM_COL32_G_SHIFT) & 0xFF); } static inline int col_b(ImU32 c) { return (int)((c >> IM_COL32_B_SHIFT) & 0xFF); } static inline int col_a(ImU32 c) { return (int)((c >> IM_COL32_A_SHIFT) & 0xFF); } static void plate_shadow(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding, int alpha_step = 12) { for (int i = 3; i >= 1; i--) { float a = (float)(alpha_step * (4 - i)); dl->AddRectFilled(ImVec2(p0.x + i * 1.5f, p0.y + i * 1.5f), ImVec2(p1.x + i * 1.5f, p1.y + i * 1.5f), IM_COL32(0, 0, 0, (int)a),
-rounding + 2.0f); } } static void draw_name_plate(ImDrawList* dl, float cx, float top_y, const char* text, ImU32 override_accent = 0) { ImVec2 ts = ImGui::CalcTextSize(text); const float pad_x = 9.0f; const float pad_y = 4.5f; const float rounding = 7.0f; const float pointer_h = 5.0f; float w = ts.x + pad_x * 2.0f; float h = ts.y + pad_y * 2.0f; ImVec2 p0(cx - w * 0.5f, top_y); ImVec2 p1(cx + w * 0.5f, top_y + h); ImU32 accent = override_accent ? override_accent : (GUI::get_is_init() ? GUI::accent_a() : plate_accent); ImU32 accent_hi = IM_COL32( std::min(255, col_r(accent) + 60), std::min(255, col_g(accent) + 60), std::min(255, col_b(accent) + 60), 255);
-plate_shadow(dl, p0, p1, rounding); dl->AddRectFilled(p0, p1, plate_bg_b, rounding); dl->AddRect(p0, p1, accent, rounding, 0, 1.4f); dl->AddRectFilledMultiColor( ImVec2(p0.x + 2.0f, p0.y + 1.0f), ImVec2(p1.x - 2.0f, p0.y + 5.0f), accent_hi, accent_hi, IM_COL32(col_r(accent), col_g(accent), col_b(accent), 0), IM_COL32(col_r(accent), col_g(accent), col_b(accent), 0)); dl->AddText(ImVec2(cx - ts.x * 0.5f, top_y + pad_y), plate_text, text); dl->AddTriangleFilled(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y), ImVec2(cx, p1.y + pointer_h), plate_bg_b); dl->AddTriangle(ImVec2(cx - 5.0f, p1.y),
-ImVec2(cx + 5.0f, p1.y), ImVec2(cx, p1.y + pointer_h), accent, 1.2f); } static void draw_item_plate(ImDrawList* dl, float cx, float top_y, const char* text, unsigned char ir, unsigned char ig, unsigned char ib) { const float icon_size = 18.0f; const float pad_x = 8.0f; const float pad_y = 4.0f; const float gap = 7.0f; const float rounding = 7.0f; const float pointer_h = 5.0f; ImVec2 ts = ImGui::CalcTextSize(text); float h = icon_size + pad_y * 2.0f; float w = pad_x + icon_size + gap + ts.x + pad_x; if (w < h) w = h; ImVec2 p0(cx - w * 0.5f, top_y); ImVec2 p1(cx + w * 0.5f, top_y + h); ImU32
-icon_col = IM_COL32(ir, ig, ib, 255); ImU32 icon_dark = IM_COL32((int)(ir * 0.16f), (int)(ig * 0.16f), (int)(ib * 0.16f), 255); ImU32 tint_hi = IM_COL32((int)(ir * 0.9f + 40), (int)(ig * 0.9f + 40), (int)(ib * 0.9f + 40), 200); plate_shadow(dl, p0, p1, rounding); dl->AddRectFilled(p0, p1, plate_bg_b, rounding); dl->AddRect(p0, p1, plate_border, rounding, 0, 1.0f); dl->AddRectFilledMultiColor( ImVec2(p0.x + 2.0f, p0.y + 1.0f), ImVec2(p1.x - 2.0f, p0.y + 4.0f), tint_hi, tint_hi, IM_COL32(ir, ig, ib, 0), IM_COL32(ir, ig, ib, 0)); ImVec2 ip0(p0.x + pad_x, top_y + pad_y); ImVec2 ip1(ip0.x +
-icon_size, ip0.y + icon_size); dl->AddRectFilled(ip0, ip1, icon_dark, 4.0f); dl->AddRect(ip0, ip1, icon_col, 4.0f, 0, 1.2f); dl->AddRectFilled(ImVec2(ip0.x + 1.0f, ip0.y + 1.0f), ImVec2(ip1.x - 1.0f, ip0.y + icon_size * 0.45f), IM_COL32(255, 255, 255, 26), 3.0f); char glyph[2] = { text[0], 0 }; if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A'); if (glyph[0] == 0) glyph[0] = '?'; ImVec2 gs = ImGui::CalcTextSize(glyph); dl->AddText(ImVec2(ip0.x + (icon_size - gs.x) * 0.5f, ip0.y + (icon_size - gs.y) * 0.5f), IM_COL32(235, 239, 245, 235), glyph); dl->AddText(ImVec2(
-ip1.x + gap, top_y + (h - ts.y) * 0.5f), plate_text, text); dl->AddTriangleFilled(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y), ImVec2(cx, p1.y + pointer_h), plate_bg_b); dl->AddTriangle(ImVec2(cx - 5.0f, p1.y), ImVec2(cx + 5.0f, p1.y), ImVec2(cx, p1.y + pointer_h), plate_border, 1.0f); } static void draw_item_tile(ImDrawList* dl, float x, float y, const esp_item_slot& slot) { const float s = 18.0f; ImU32 icon_col = IM_COL32(slot.icon_r, slot.icon_g, slot.icon_b, 255); ImU32 icon_bg = IM_COL32(slot.icon_r, slot.icon_g, slot.icon_b, 64); dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s)
-, icon_bg, 4.0f); dl->AddRectFilled(ImVec2(x + 1.0f, y + 1.0f), ImVec2(x + s - 1.0f, y + s * 0.5f), IM_COL32(255, 255, 255, 20), 3.0f); dl->AddRect(ImVec2(x, y), ImVec2(x + s, y + s), icon_col, 4.0f, 0, 1.0f); char glyph[2] = { slot.name.empty() ? '?' : slot.name[0], 0 }; if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A'); if (glyph[0] == 0) glyph[0] = '?'; ImVec2 gs = ImGui::CalcTextSize(glyph); dl->AddText(ImVec2(x + (s - gs.x) * 0.5f, y + (s - gs.y) * 0.5f), IM_COL32(235, 239, 245, 235), glyph); if (slot.count > 1) { std::string badge = "x" + std::to_string(
-slot.count); ImVec2 cs = ImGui::CalcTextSize(badge.c_str()); dl->AddText(ImVec2(x + s - cs.x - 1.5f, y + s - cs.y - 1.0f), IM_COL32(235, 239, 245, 240), badge.c_str()); } } static void draw_entity_item_tiles(ImDrawList* dl, float cx, float top_y, const std::vector<esp_item_slot>& items) { const float s = 18.0f, gap = 3.0f; size_t n = items.size(); if (n > 6) n = 6; float total = (float)n * (s + gap) - gap; float x0 = cx - total * 0.5f; for (size_t i = 0; i < n; i++) draw_item_tile(dl, x0 + (float)i * (s + gap), top_y, items[i]); } static jmethodID g_entity_get_name_mid = nullptr; static
+entity_scan_cache> g_scan_cache; static constexpr long long k_scan_interval_us = 200000; static constexpr long long k_fade_in_us = 120000; static constexpr long long k_grace_us = 400000; static constexpr long long k_fade_out_us = 500000; // --- colors ----------------------------------------------------------------
+// Every ESP color is derived from the client (menu) accent: the same
+// hstyle::grad_a / grad_b pair the HUD glass cards use, refreshed once per
+// draw pass so boxes, bars, plates, tracers and arrows all match the theme.
+static ImU32 s_c0 = IM_COL32(88, 140, 255, 255);
+static ImU32 s_c1 = IM_COL32(150, 175, 255, 255);
+static const ImU32 plate_bg_b = IM_COL32(15, 17, 22, 238);
+static const ImU32 esp_friend = IM_COL32(48, 210, 88, 255);
+static const ImU32 esp_friend_hi = IM_COL32(170, 255, 200, 255);
+
+static void refresh_accent() {
+    s_c0 = hstyle::grad_a(0.0f);
+    s_c1 = hstyle::grad_b(0.30f);
+}
+
+static inline int col_r(ImU32 c) { return (int)((c >> IM_COL32_R_SHIFT) & 0xFF); }
+static inline int col_g(ImU32 c) { return (int)((c >> IM_COL32_G_SHIFT) & 0xFF); }
+static inline int col_b(ImU32 c) { return (int)((c >> IM_COL32_B_SHIFT) & 0xFF); }
+static inline int a_mul(int alpha, float k) {
+    int v = (int)((float)alpha * k);
+    return v < 0 ? 0 : (v > 255 ? 255 : v);
+}
+
+static void plate_shadow(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding, int alpha) {
+    for (int i = 3; i >= 1; i--) {
+        int a = alpha * (4 - i) / 4;
+        if (a <= 0) continue;
+        float k = (float)i;
+        dl->AddRectFilled(ImVec2(p0.x - k * 1.4f, p0.y - k * 0.6f + k * 1.5f),
+                          ImVec2(p1.x + k * 1.4f, p1.y + k * 0.6f + k * 1.5f),
+                          IM_COL32(0, 0, 0, a), rounding + k);
+    }
+}
+
+// Shared rounded glass body for every plate: shadow, body, accent gloss,
+// GPU sweep shader (hud_fx) and the accent border.
+static void plate_body(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding,
+                       int alpha, ImU32 accent, ImU32 accent_hi, float phase) {
+    plate_shadow(dl, p0, p1, rounding, a_mul(alpha, 0.85f));
+    dl->AddRectFilled(p0, p1, hstyle::with_a(plate_bg_b, alpha), rounding);
+    dl->PushClipRect(ImVec2(p0.x + rounding * 0.6f, p0.y), ImVec2(p1.x - rounding * 0.6f, p0.y + 9.0f), true);
+    dl->AddRectFilledMultiColor(ImVec2(p0.x, p0.y), ImVec2(p1.x, p0.y + 9.0f),
+                                hstyle::with_a(accent_hi, a_mul(alpha, 0.30f)),
+                                hstyle::with_a(accent_hi, a_mul(alpha, 0.30f)),
+                                hstyle::with_a(accent_hi, 0),
+                                hstyle::with_a(accent_hi, 0));
+    dl->PopClipRect();
+    hud_fx::fx(dl, p0, p1, rounding, 0.34f * ((float)alpha / 255.0f), phase, hud_fx::FX_SWEEP);
+    dl->AddRect(ImVec2(p0.x - 3.5f, p0.y - 3.5f), ImVec2(p1.x + 3.5f, p1.y + 3.5f),
+                hstyle::with_a(accent, a_mul(alpha, 0.20f)), rounding + 3.5f, 0, 1.5f);
+    dl->AddRect(p0, p1, hstyle::with_a(accent, a_mul(alpha, 0.95f)), rounding, 0, 1.5f);
+}
+
+static void plate_pointer(ImDrawList* dl, const ImVec2& p1, float cx, int alpha, ImU32 accent) {
+    ImVec2 a(cx - 5.5f, p1.y), b(cx + 5.5f, p1.y), c(cx, p1.y + 6.0f);
+    dl->AddTriangleFilled(a, b, c, hstyle::with_a(plate_bg_b, alpha));
+    dl->AddTriangle(a, b, c, hstyle::with_a(accent, a_mul(alpha, 0.95f)), 1.5f);
+}
+
+// Name tag: bold Monocraft text, dark glass, accent border, shader sweep.
+// `bottom_y` is where the plate ends — the little pointer hangs below it, so
+// the caller only has to place it just above the box. Returns the height.
+static float draw_name_plate(ImDrawList* dl, float cx, float bottom_y, const char* text,
+                             int alpha, ImU32 accent, ImU32 accent_hi, float phase) {
+    if (!dl || !text || !text[0] || alpha <= 0) return 0.0f;
+    ImFont* f = GUI::font_hud_bold();
+    if (!f) f = ImGui::GetFont();
+    const float fs = 14.0f;
+    const float pad_x = 11.0f, pad_y = 6.5f, rounding = 9.0f;
+    ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, text);
+    float w = ts.x + pad_x * 2.0f;
+    float h = ts.y + pad_y * 2.0f;
+    ImVec2 p0(cx - w * 0.5f, bottom_y - h);
+    ImVec2 p1(cx + w * 0.5f, bottom_y);
+    plate_body(dl, p0, p1, rounding, alpha, accent, accent_hi, phase);
+    ImVec2 tp(cx - ts.x * 0.5f, p0.y + pad_y);
+    dl->AddText(f, fs, ImVec2(tp.x, tp.y + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), text);
+    hstyle::gradient_text(dl, tp, text, f, fs, accent_hi, IM_COL32(255, 255, 255, 255), alpha);
+    plate_pointer(dl, p1, cx, alpha, accent);
+    return h;
+}
+
+// Dropped-item plate: same glass, but with the vanilla rarity icon box inside.
+static float draw_item_plate(ImDrawList* dl, float cx, float bottom_y, const char* text,
+                             unsigned char ir, unsigned char ig, unsigned char ib,
+                             int alpha, ImU32 accent, ImU32 accent_hi, float phase) {
+    if (!dl || !text || !text[0] || alpha <= 0) return 0.0f;
+    ImFont* f = GUI::font_hud_bold();
+    if (!f) f = ImGui::GetFont();
+    const float fs = 14.0f, icon_size = 20.0f;
+    const float pad_x = 9.0f, pad_y = 5.0f, gap = 8.0f, rounding = 9.0f;
+    ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, text);
+    float h = icon_size + pad_y * 2.0f;
+    float w = pad_x + icon_size + gap + ts.x + pad_x;
+    if (w < h) w = h;
+    ImVec2 p0(cx - w * 0.5f, bottom_y - h);
+    ImVec2 p1(cx + w * 0.5f, bottom_y);
+    plate_body(dl, p0, p1, rounding, alpha, accent, accent_hi, phase);
+    dl->AddRectFilled(p0, p1, IM_COL32(ir, ig, ib, a_mul(alpha, 0.10f)), rounding);
+    ImVec2 ip0(p0.x + pad_x, p0.y + pad_y);
+    ImVec2 ip1(ip0.x + icon_size, ip0.y + icon_size);
+    dl->AddRectFilled(ip0, ip1,
+                      IM_COL32((int)(ir * 0.16f), (int)(ig * 0.16f), (int)(ib * 0.16f), a_mul(alpha, 0.96f)), 5.0f);
+    dl->AddRectFilled(ImVec2(ip0.x + 1.0f, ip0.y + 1.0f), ImVec2(ip1.x - 1.0f, ip0.y + icon_size * 0.45f),
+                      IM_COL32(255, 255, 255, a_mul(alpha, 0.14f)), 4.0f);
+    dl->AddRect(ip0, ip1, IM_COL32(ir, ig, ib, alpha), 5.0f, 0, 1.4f);
+    char glyph[2] = { text[0], 0 };
+    if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
+    if (glyph[0] == 0) glyph[0] = '?';
+    ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
+    float gx = ip0.x + (icon_size - gs.x) * 0.5f;
+    float gy = ip0.y + (icon_size - gs.y) * 0.5f;
+    dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
+    dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
+    ImVec2 tp(ip1.x + gap, p0.y + (h - ts.y) * 0.5f);
+    dl->AddText(f, fs, ImVec2(tp.x, tp.y + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), text);
+    hstyle::gradient_text(dl, tp, text, f, fs, accent_hi, IM_COL32(255, 255, 255, 255), alpha);
+    plate_pointer(dl, p1, cx, alpha, accent);
+    return h;
+}
+
+static void draw_item_tile(ImDrawList* dl, float x, float y, const esp_item_slot& slot,
+                           int alpha, ImU32 accent, ImU32 accent_hi) {
+    if (!dl || alpha <= 0) return;
+    ImFont* f = GUI::font_hud_bold();
+    if (!f) f = ImGui::GetFont();
+    const float s = 19.0f;
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s),
+                      hstyle::with_a(IM_COL32(11, 12, 16, 245), alpha), 5.0f);
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s),
+                      IM_COL32(slot.icon_r, slot.icon_g, slot.icon_b, a_mul(alpha, 0.24f)), 5.0f);
+    dl->AddRectFilled(ImVec2(x + 1.0f, y + 1.0f), ImVec2(x + s - 1.0f, y + s * 0.5f),
+                      IM_COL32(255, 255, 255, a_mul(alpha, 0.10f)), 4.0f);
+    dl->AddRect(ImVec2(x, y), ImVec2(x + s, y + s),
+                hstyle::with_a(accent, a_mul(alpha, 0.90f)), 5.0f, 0, 1.4f);
+    char glyph[2] = { slot.name.empty() ? '?' : slot.name[0], 0 };
+    if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
+    if (glyph[0] == 0) glyph[0] = '?';
+    const float fs = 12.0f;
+    ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
+    float gx = x + (s - gs.x) * 0.5f;
+    float gy = y + (s - gs.y) * 0.5f - (slot.count > 1 ? 1.5f : 0.0f);
+    dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
+    dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
+    if (slot.count > 1) {
+        std::string badge = "x" + std::to_string(slot.count);
+        const float bfs = 10.0f;
+        ImVec2 cs = f->CalcTextSizeA(bfs, FLT_MAX, 0.0f, badge.c_str());
+        ImVec2 b0(x + s - cs.x - 5.0f, y + s - cs.y - 4.0f);
+        ImVec2 b1(b0.x + cs.x + 6.0f, b0.y + cs.y + 4.0f);
+        float br = (b1.y - b0.y) * 0.5f;
+        dl->AddRectFilled(b0, b1, hstyle::with_a(IM_COL32(8, 9, 12, 245), alpha), br);
+        dl->AddRect(b0, b1, hstyle::with_a(accent, a_mul(alpha, 0.85f)), br, 0, 1.0f);
+        dl->AddText(f, bfs, ImVec2(b0.x + 3.0f, b0.y + 2.0f), hstyle::with_a(accent_hi, alpha), badge.c_str());
+    }
+}
+
+static void draw_entity_item_tiles(ImDrawList* dl, float cx, float top_y,
+                                   const std::vector<esp_item_slot>& items,
+                                   int alpha, ImU32 accent, ImU32 accent_hi) {
+    const float s = 19.0f, gap = 3.0f;
+    size_t n = items.size();
+    if (n > 6) n = 6;
+    if (n == 0) return;
+    float total = (float)n * (s + gap) - gap;
+    float x0 = cx - total * 0.5f;
+    for (size_t i = 0; i < n; i++)
+        draw_item_tile(dl, x0 + (float)i * (s + gap), top_y, items[i], alpha, accent, accent_hi);
+}
+
+// Rounded outline with a vertical accent ramp. AddRect() keeps the corners
+// rounded (AddRectFilledMultiColor has no rounding in this ImGui version), so
+// the ramp is built from horizontal bands clipped onto the outline.
+static void draw_grad_rect(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1,
+                           ImU32 c0, ImU32 c1, int alpha, float th, float rounding) {
+    dl->AddRect(ImVec2(p0.x - 1.5f, p0.y - 1.5f), ImVec2(p1.x + 1.5f, p1.y + 1.5f),
+                IM_COL32(0, 0, 0, a_mul(alpha, 0.60f)), rounding + 1.5f, 0, th + 3.0f);
+    // 6 clipped bands instead of 12: every band forces ImGui to split the draw
+    // command (one glScissor + one draw call each), and on a box outline the
+    // half-step difference is not visible.
+    const int bands = 6;
+    float y0 = p0.y - th * 0.5f;
+    float bh = (p1.y + th * 0.5f - y0) / (float)bands;
+    if (bh <= 0.0f) return;
+    for (int i = 0; i < bands; i++) {
+        ImU32 c = hstyle::with_a(hstyle::lerp(c0, c1, ((float)i + 0.5f) / (float)bands), alpha);
+        dl->PushClipRect(ImVec2(-100000.0f, y0 + (float)i * bh),
+                         ImVec2(100000.0f, y0 + (float)(i + 1) * bh), true);
+        dl->AddRect(p0, p1, c, rounding, 0, th);
+        dl->PopClipRect();
+    }
+}
+
+// Extra soft rings for the glow box mode.
+static void draw_box_glow(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding,
+                          int alpha, ImU32 c0, ImU32 c1) {
+    dl->AddRect(ImVec2(p0.x - 5.0f, p0.y - 5.0f), ImVec2(p1.x + 5.0f, p1.y + 5.0f),
+                hstyle::with_a(c0, a_mul(alpha, 0.34f)), rounding + 5.0f, 0, 1.7f);
+    dl->AddRect(ImVec2(p0.x - 10.0f, p0.y - 10.0f), ImVec2(p1.x + 10.0f, p1.y + 10.0f),
+                hstyle::with_a(c1, a_mul(alpha, 0.16f)), rounding + 10.0f, 0, 1.5f);
+}
+
+// Tracer: dark backing + accent ramp along the line.
+static void draw_grad_line(ImDrawList* dl, const ImVec2& a, const ImVec2& b, int alpha, float th) {
+    dl->AddLine(a, b, IM_COL32(0, 0, 0, a_mul(alpha, 0.55f)), th + 2.0f);
+    const int seg = 4;
+    for (int i = 0; i < seg; i++) {
+        float t0 = (float)i / (float)seg;
+        float t1 = (float)(i + 1) / (float)seg;
+        ImVec2 p0(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0);
+        ImVec2 p1(a.x + (b.x - a.x) * (t1 + 0.03f), a.y + (b.y - a.y) * (t1 + 0.03f));
+        dl->AddLine(p0, p1, hstyle::with_a(hstyle::lerp(s_c0, s_c1, (t0 + t1) * 0.5f), alpha), th);
+    }
+}
+
+// Direction arrow (assets/pointer.png, embedded): rotated, tinted quad with a
+// thin dark rim so it stays readable on snow/sky. No backing disc — the
+// pointer silhouette alone keeps it small and clean.
+static void draw_arrow(ImDrawList* dl, float cx, float cy, float size, float angle,
+                       ImU32 tint, int alpha) {
+    if (!dl || alpha <= 0) return;
+    unsigned tex = hud_icons::png(pointer_png, pointer_png_size);
+    if (!tex) return;
+    float s = sinf(angle), c = cosf(angle);
+    auto rot = [&](float x, float y) { return ImVec2(cx + x * c - y * s, cy + x * s + y * c); };
+    float hw = size * 0.5f, hh = size * 0.52f;
+    const ImVec2 uv0(0.0f, 0.0f), uv1(1.0f, 0.0f), uv2(1.0f, 1.0f), uv3(0.0f, 1.0f);
+    const float k = 1.18f;   // rim: ~1.5px dark outline around a 17px pointer
+    dl->PushTextureID((ImTextureID)(intptr_t)tex);
+    dl->PrimReserve(6, 4);
+    dl->PrimQuadUV(rot(-hw * k, -hh * k), rot(hw * k, -hh * k), rot(hw * k, hh * k), rot(-hw * k, hh * k),
+                   uv0, uv1, uv2, uv3, IM_COL32(0, 0, 0, a_mul(alpha, 0.75f)));
+    dl->PrimReserve(6, 4);
+    dl->PrimQuadUV(rot(-hw, -hh), rot(hw, -hh), rot(hw, hh), rot(-hw, hh),
+                   uv0, uv1, uv2, uv3, hstyle::with_a(tint, alpha));
+    dl->PopTextureID();
+}
+static jmethodID g_entity_get_name_mid = nullptr; static
 jmethodID g_text_get_string_mid = nullptr; static jmethodID g_player_get_profile_mid = nullptr; static jmethodID g_profile_get_name_mid = nullptr; static jmethodID cache_method(JNIEnv* env, jclass cls, const char* name, const char* sig, jmethodID& slot) { if (slot) return slot; slot = env->GetMethodID(cls, name, sig); if (env->ExceptionCheck()) { env->ExceptionClear(); slot = nullptr; } return slot; } static std::string get_entity_name(JNIEnv* env, jobject entity) { std::string result; jclass ec = sdk::classloader::find_class(env, sdk::mappings::entity_class_sig); if (!ec) return result;
 jmethodID mid = cache_method(env, ec, sdk::mappings::entity_get_name_name, sdk::mappings::entity_get_name_sig, g_entity_get_name_mid); env->DeleteLocalRef(ec); if (!mid) return result; jobject name_text = env->CallObjectMethod(entity, mid); if (env->ExceptionCheck()) { env->ExceptionClear(); return result; } if (!name_text) return result; jclass tc = sdk::classloader::find_class(env, sdk::mappings::text_class_sig); if (env->ExceptionCheck()) { env->ExceptionClear(); env->DeleteLocalRef(name_text); return result; } if (!tc) { env->DeleteLocalRef(name_text); return result; } jmethodID str_mid =
 cache_method(env, tc, sdk::mappings::text_get_string_name, sdk::mappings::text_get_string_sig, g_text_get_string_mid); if (str_mid) { jstring s = (jstring)env->CallObjectMethod(name_text, str_mid, 0x7FFFFFFF); if (env->ExceptionCheck()) { env->ExceptionClear(); } else if (s) { const char* utf = env->GetStringUTFChars(s, nullptr); if (utf) { result = utf; env->ReleaseStringUTFChars(s, utf); } env->DeleteLocalRef(s); } } env->DeleteLocalRef(tc); env->DeleteLocalRef(name_text); return result; } static std::string get_player_nick(JNIEnv* env, jobject entity) { std::string result; jclass pe = sdk
@@ -74,7 +304,7 @@ true; } } static void update_item_render(esp_render_entry& entry, double x, doub
     double f = 1.0 - pow(1.0 - factor, dt_frames);
     for (int i = 0; i < 9; i++) st.current[i] += (st.target[i] - st.current[i]) * f;
 } static int compute_alpha(const
-esp_render_entry& entry, long long now) { long long age = now - entry.created_us; long long since_seen = now - entry.last_seen_us; if (age < k_fade_in_us) return (int)(255 * (double)age / (double)k_fade_in_us); if (since_seen < k_grace_us) return 255; long long fade_elapsed = since_seen - k_grace_us; if (fade_elapsed >= k_fade_out_us) return 0; return (int)(255 * (1.0 - (double)fade_elapsed / (double)k_fade_out_us)); } void flaway::modules::esp::run() { { std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; long long ts = now_us(); for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it != g_items.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_items.erase(it); else ++it; } } bool esp_any = globals::box_enabled || globals::esp_health_bar || globals::esp_name_enabled || globals::esp_item_enabled || globals::esp_tracers || globals::hud_target_enabled || globals::hud_pickups_enabled; bool want_hide =
+esp_render_entry& entry, long long now) { long long age = now - entry.created_us; long long since_seen = now - entry.last_seen_us; if (age < k_fade_in_us) return (int)(255 * (double)age / (double)k_fade_in_us); if (since_seen < k_grace_us) return 255; long long fade_elapsed = since_seen - k_grace_us; if (fade_elapsed >= k_fade_out_us) return 0; return (int)(255 * (1.0 - (double)fade_elapsed / (double)k_fade_out_us)); } void flaway::modules::esp::run() { { std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; long long ts = now_us(); for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it != g_items.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_items.erase(it); else ++it; } } bool esp_any = globals::box_enabled || globals::esp_health_bar || globals::esp_name_enabled || globals::esp_item_enabled || globals::esp_tracers || globals::esp_arrows || globals::hud_target_enabled || globals::hud_pickups_enabled; bool want_hide =
 esp_any && globals::esp_hide_vanilla_names; nametag_hook::set_enabled(want_hide); if (want_hide && !nametag_hook::is_initialized()) nametag_hook::init(); if (!esp_any) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); return; } auto env = flaway::instance->get_env(); if (!env || !sdk::instance) { return; } if (sdk::instance->is_screen_open()) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); return; } { jobject player = sdk::instance->get_player(); if (player) { sdk::
 entity_client local(player); esp_camera_data cam; cam.cam_x = local.get_x(); cam.cam_y = local.get_y() + 1.62; cam.cam_z = local.get_z(); cam.yaw = local.get_yaw(); cam.pitch = local.get_pitch(); cam.fov = 70.0f; { std::lock_guard<std::mutex> lock(esp_mutex); if (esp_cam.fov > 1.0f) cam.fov = esp_cam.fov; esp_cam = cam; } env->DeleteLocalRef(player); } } static auto g_last_scan = std::chrono::steady_clock::now();
     auto g_now = std::chrono::steady_clock::now();
@@ -104,18 +334,254 @@ itemstack_get_name_sig, s_get_name_mid); if (get_name_mid) { jobject name_text =
 ExceptionCheck()) env->ExceptionClear(); if (item) { jclass ic = env->GetObjectClass(item); if (ic) { static jmethodID s_get_key_mid = nullptr; jmethodID get_key_mid = cache_method(env, ic, sdk::mappings::item_get_translation_key_name, sdk::mappings::item_get_translation_key_sig, s_get_key_mid); if (get_key_mid) { jstring key = (jstring)env->CallObjectMethod(item, get_key_mid); if (env->ExceptionCheck()) env->ExceptionClear(); if (key) { const char* ckey = env->GetStringUTFChars(key, nullptr); if (ckey) { iname = ckey; env->ReleaseStringUTFChars(key, ckey); } env->DeleteLocalRef(key); } } env
 ->DeleteLocalRef(ic); } env->DeleteLocalRef(item); } } env->DeleteLocalRef(sc2); } env->DeleteLocalRef(stack); } else { env->DeleteLocalRef(stack); } } } if (iname.empty()) iname = get_entity_name(env, e); if (!iname.empty()) g_item_name_cache[eid] = clean_name(iname); long long ts = now_us(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_items[eid]; bool fresh = (entry.created_us == 0); entry.name = iname; entry.icon_r = icon_r; entry.icon_g = icon_g; entry.icon_b = icon_b; entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts;
 update_item_render(entry, ix, iy, iz, ts); if (fresh && !iname.empty() && dxp * dxp + dyp * dyp + dzp * dzp <= 16.0) { g_pickups.push_back({iname, icon_r, icon_g, icon_b, ts, tex}); if (g_pickups.size() > 8) g_pickups.pop_front(); } } for (jobject e : items) if (e) env->DeleteLocalRef(e); env->DeleteLocalRef(item_entity_cls); } } { std::lock_guard<std::mutex> lock(esp_mutex); esp_cam.cam_x = eye_x; esp_cam.cam_y = eye_y; esp_cam.cam_z = eye_z; esp_cam.yaw = cam_yaw; esp_cam.pitch = cam_pitch; esp_cam.fov = cam_fov; if (esp_cam.fov < 1.0f) esp_cam.fov = 70.0f; } for (jobject p : wplayers) if (p) env->
-DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } void flaway::modules::esp::draw_boxes() { if (!globals::box_enabled && !globals::esp_health_bar && !globals::esp_name_enabled && !globals::esp_item_enabled) return; if (!GUI::get_is_init()) return; if (sdk::instance && sdk::instance->is_screen_open()) return; ImGuiIO& io = ImGui::GetIO(); int sw = (int)io.DisplaySize.x; int sh = (int)io.DisplaySize.y; if (sw <= 0 || sh <= 0) return; ImDrawList* dl = ImGui::GetBackgroundDrawList(); if (!dl) return; std::unordered_map<int, esp_render_entry> pc; std::unordered_map<int,
-esp_render_entry> ic; esp_camera_data cam; { std::lock_guard<std::mutex> lock(esp_mutex); pc.swap(g_players); ic.swap(g_items); cam = esp_cam; } if (pc.empty() && ic.empty()) return; for (auto& kv : pc) step_smooth(kv.second.smooth); for (auto& kv : ic) step_smooth(kv.second.smooth); projection::set_view((float)cam.cam_x, (float)cam.cam_y, (float)cam.cam_z, cam.yaw, cam.pitch, cam.fov, sw, sh); g_frame_count++; long long ts = now_us(); float offset = globals::esp_vertical_offset; int locked_id = flaway::modules::aimassist::get_locked_id(); for (auto& kv : pc) { esp_render_entry& entry = kv.
-second; int alpha = compute_alpha(entry, ts); if (alpha <= 0) continue; bool is_locked = ((int)kv.first == locked_id); float dist_plates = 0.0f; double* cv = entry.smooth.current; float bmin[3] = { (float)cv[3], (float)cv[4], (float)cv[5] }; float bmax[3] = { (float)cv[6], (float)cv[7], (float)cv[8] }; { const flaway::projection::view_state& vs = flaway::projection::state(); if (vs.valid) { float cx = (bmin[0] + bmax[0]) * 0.5f; float cy = (bmin[1] + bmax[1]) * 0.5f; float cz = (bmin[2] + bmax[2]) * 0.5f; float dx = cx - vs.cam_pos[0]; float dy = cy - vs.cam_pos[1]; float dz = cz - vs.cam_pos
-[2]; float dot = dx * vs.forward[0] + dy * vs.forward[1] + dz * vs.forward[2]; if (dot < -1.5f) continue; } } float corners[8][3] = { {bmin[0], bmin[1] + offset, bmin[2]}, {bmax[0], bmin[1] + offset, bmin[2]}, {bmax[0], bmin[1] + offset, bmax[2]}, {bmin[0], bmin[1] + offset, bmax[2]}, {bmin[0], bmax[1] + offset, bmin[2]}, {bmax[0], bmax[1] + offset, bmin[2]}, {bmax[0], bmax[1] + offset, bmax[2]}, {bmin[0], bmax[1] + offset, bmax[2]} }; float sx[8], sy[8]; bool corner_visible[8] = {}; int valid = 0; float min_sx = FLT_MAX, max_sx = -FLT_MAX; float min_sy = FLT_MAX, max_sy = -FLT_MAX; for (int
-i = 0; i < 8; i++) { if (projection::world_to_screen(corners[i][0], corners[i][1], corners[i][2], sx[i], sy[i])) { corner_visible[i] = true; if (sx[i] < min_sx) min_sx = sx[i]; if (sx[i] > max_sx) max_sx = sx[i]; if (sy[i] < min_sy) min_sy = sy[i]; if (sy[i] > max_sy) max_sy = sy[i]; valid++; } } if (valid < 4) continue; if (max_sx < -24.0f || min_sx > (float)sw + 24.0f || max_sy < -24.0f || min_sy > (float)sh + 24.0f) continue; { const flaway::projection::view_state& vs = flaway::projection::state(); float dx = (bmin[0] + bmax[0]) * 0.5f - vs.cam_pos[0]; float dy = (bmin[1] + bmax[1]) * 0.5f
-- vs.cam_pos[1]; float dz = (bmin[2] + bmax[2]) * 0.5f - vs.cam_pos[2]; dist_plates = sqrtf(dx * dx + dy * dy + dz * dz); } ImU32 w_alpha = entry.is_friend ? IM_COL32(48, 210, 88, alpha) : IM_COL32(255, 255, 255, alpha); ImU32 b_alpha = IM_COL32(0, 0, 0, alpha); float box_rounding = 4.0f; if (globals::box_enabled) { if (globals::esp_mode == 3) { static const int edges[12][2] = { {0,1},{1,2},{2,3},{3,0}, {4,5},{5,6},{6,7},{7,4}, {0,4},{1,5},{2,6},{3,7} }; for (int e = 0; e < 12; e++) { int a = edges[e][0], b = edges[e][1]; if (!corner_visible[a] || !corner_visible[b]) continue; dl->AddLine(ImVec2(sx[a], sy[a]), ImVec2(sx[b], sy[b]), w_alpha,
-1.5f); } } else { if (is_locked) { ImU32 ga = GUI::get_is_init() ? GUI::accent_a() : plate_accent; ImU32 gb = GUI::get_is_init() ? GUI::accent_b() : plate_accent; ImU32 ca = IM_COL32(col_r(ga), col_g(ga), col_b(ga), alpha); ImU32 cb = IM_COL32(col_r(gb), col_g(gb), col_b(gb), alpha); const float th = 2.5f; dl->AddRectFilledMultiColor( ImVec2(min_sx - th, min_sy - th), ImVec2(max_sx + th, min_sy), ca, cb, cb, ca); dl->AddRectFilledMultiColor( ImVec2(min_sx - th, max_sy), ImVec2(max_sx + th, max_sy + th), cb, ca, ca, cb); dl->AddRectFilledMultiColor( ImVec2(min_sx - th, min_sy - th), ImVec2(
-min_sx, max_sy + th), ca, ca, cb, cb); dl->AddRectFilledMultiColor( ImVec2(max_sx, min_sy - th), ImVec2(max_sx + th, max_sy + th), cb, cb, ca, ca); dl->AddRect(ImVec2(min_sx - 1, min_sy - 1), ImVec2(max_sx + 1, max_sy + 1), IM_COL32(col_r(ga), col_g(ga), col_b(ga), alpha), box_rounding + 1.0f, 0, 1.0f); } else { dl->AddRect(ImVec2(min_sx, min_sy), ImVec2(max_sx, max_sy), w_alpha, box_rounding, 0, 1.5f); dl->AddRect(ImVec2(min_sx - 1, min_sy - 1), ImVec2(max_sx + 1, max_sy + 1), b_alpha, box_rounding + 1.0f, 0, 1.0f); } } } if (globals::esp_tracers) { float ecx = (min_sx + max_sx) * 0.5f; float ecy = (min_sy + max_sy) * 0.5f; float scx = (float)sw * 0.5f; float sh_half = (float)sh; float screen_bot_y = sh_half; float tr_r, tr_g, tr_b; if (entry.is_friend) { tr_r = 48.0f; tr_g = 210.0f; tr_b = 88.0f; } else { tr_r = (float)((globals::esp_tracer_color[0] * 255.0f)); tr_g = (float)((globals::esp_tracer_color[1] * 255.0f)); tr_b = (float)((globals::esp_tracer_color[2] * 255.0f)); } float tr_a_val = globals::esp_tracer_color[3]; int tr_a = (int)(tr_a_val * (float)alpha); dl->AddLine(ImVec2(scx, screen_bot_y), ImVec2(ecx, ecy), IM_COL32((int)tr_r, (int)tr_g, (int)tr_b, tr_a), 1.2f); } if (globals::esp_health_bar && entry.max_health > 0) { float hp =
-entry.health / entry.max_health; if (hp > 1.0f) hp = 1.0f; if (hp < 0.0f) hp = 0.0f; float bw = 3.0f; float bh = max_sy - min_sy; float bx = min_sx - bw - 3.0f; float fh = bh * hp; const float bar_round = 1.5f; dl->AddRectFilled(ImVec2(bx - 1, min_sy - 1), ImVec2(bx + bw + 1, max_sy + 1), b_alpha, 2.0f); dl->AddRectFilled(ImVec2(bx, min_sy), ImVec2(bx + bw, max_sy), IM_COL32(50, 50, 50, (int)(alpha * 0.78f)), bar_round); if (fh > 0.5f) { dl->AddRectFilledMultiColor( ImVec2(bx, max_sy - fh), ImVec2(bx + bw, max_sy), IM_COL32(0, 255, 0, alpha), IM_COL32(0, 255, 0, alpha), IM_COL32(255, 0, 0,
-alpha), IM_COL32(255, 0, 0, alpha)); } } if (globals::esp_name_enabled && !entry.name.empty() && dist_plates <= 96.0f) { float nx = (min_sx + max_sx) * 0.5f; float ny = min_sy - 20.0f; draw_name_plate(dl, nx, ny, entry.name.c_str(), entry.is_friend ? IM_COL32(48, 210, 88, 255) : 0); if (globals::esp_item_enabled && !entry.items.empty()) { ImVec2 nts = ImGui::CalcTextSize(entry.name.c_str()); draw_entity_item_tiles(dl, nx, ny + nts.y + 9.0f + 4.0f, entry.items); } } else if (globals::esp_item_enabled && !entry.items.empty() && dist_plates <= 96.0f) { float nx = (min_sx + max_sx) * 0.5f; float ny = min_sy - 20.0f; draw_entity_item_tiles(dl, nx
-, ny, entry.items); } } for (auto& kv : ic) { esp_render_entry& entry = kv.second; int alpha = compute_alpha(entry, ts); if (alpha <= 0 || entry.name.empty()) continue; double* cv = entry.smooth.current; float ix = (float)cv[0], iy = (float)cv[1], iz = (float)cv[2]; { const flaway::projection::view_state& vs = flaway::projection::state(); if (vs.valid) { float dx = ix - vs.cam_pos[0]; float dy = iy - vs.cam_pos[1]; float dz = iz - vs.cam_pos[2]; if (dx * vs.forward[0] + dy * vs.forward[1] + dz * vs.forward[2] < -0.5f) continue; } } float sx, sy; if (!projection::world_to_screen(ix, iy + 0.3f
-+ offset, iz, sx, sy)) continue; if (sx < -24.0f || sx > (float)sw + 24.0f || sy < -24.0f || sy > (float)sh + 24.0f) continue; if (globals::esp_item_enabled) draw_item_plate(dl, sx, sy - 15.0f, entry.name.c_str(), entry.icon_r, entry.icon_g, entry.icon_b); } { std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0) { it = g_players.erase(it); continue; } if (ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it !=
+DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } void flaway::modules::esp::draw_boxes() {
+    const bool want_box = globals::box_enabled;
+    const bool want_hp = globals::esp_health_bar;
+    const bool want_name = globals::esp_name_enabled;
+    const bool want_item = globals::esp_item_enabled;
+    const bool want_tracer = globals::esp_tracers;
+    const bool want_arrows = globals::esp_arrows;
+    if (!want_box && !want_hp && !want_name && !want_item && !want_tracer && !want_arrows) return;
+    if (!GUI::get_is_init()) return;
+    if (sdk::instance && sdk::instance->is_screen_open()) return;
+    ImGuiIO& io = ImGui::GetIO();
+    int sw = (int)io.DisplaySize.x;
+    int sh = (int)io.DisplaySize.y;
+    if (sw <= 0 || sh <= 0) return;
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    if (!dl) return;
+    // The ESP queues GPU sweeps too: reset (frame-guarded) and pick up the
+    // current client accent before anything is drawn.
+    hud_fx::begin_frame();
+    refresh_accent();
+    std::unordered_map<int, esp_render_entry> pc;
+    std::unordered_map<int, esp_render_entry> ic;
+    esp_camera_data cam;
+    {
+        std::lock_guard<std::mutex> lock(esp_mutex);
+        pc.swap(g_players);
+        ic.swap(g_items);
+        cam = esp_cam;
+    }
+    if (pc.empty() && ic.empty()) return;
+    for (auto& kv : pc) step_smooth(kv.second.smooth);
+    for (auto& kv : ic) step_smooth(kv.second.smooth);
+    projection::set_view((float)cam.cam_x, (float)cam.cam_y, (float)cam.cam_z, cam.yaw, cam.pitch, cam.fov, sw, sh);
+    g_frame_count++;
+    long long ts = now_us();
+    float offset = globals::esp_vertical_offset;
+    int locked_id = flaway::modules::aimassist::get_locked_id();
+    for (auto& kv : pc) {
+        esp_render_entry& entry = kv.second;
+        int alpha = compute_alpha(entry, ts);
+        if (alpha <= 0) continue;
+        bool is_locked = ((int)kv.first == locked_id);
+        float dist_plates = 0.0f;
+        double* cv = entry.smooth.current;
+        float bmin[3] = { (float)cv[3], (float)cv[4], (float)cv[5] };
+        float bmax[3] = { (float)cv[6], (float)cv[7], (float)cv[8] };
+        {
+            const flaway::projection::view_state& vs = flaway::projection::state();
+            if (vs.valid) {
+                float cx = (bmin[0] + bmax[0]) * 0.5f;
+                float cy = (bmin[1] + bmax[1]) * 0.5f;
+                float cz = (bmin[2] + bmax[2]) * 0.5f;
+                float dx = cx - vs.cam_pos[0];
+                float dy = cy - vs.cam_pos[1];
+                float dz = cz - vs.cam_pos[2];
+                float dot = dx * vs.forward[0] + dy * vs.forward[1] + dz * vs.forward[2];
+                if (dot < -1.5f) continue;
+            }
+        }
+        float corners[8][3] = {
+            {bmin[0], bmin[1] + offset, bmin[2]}, {bmax[0], bmin[1] + offset, bmin[2]},
+            {bmax[0], bmin[1] + offset, bmax[2]}, {bmin[0], bmin[1] + offset, bmax[2]},
+            {bmin[0], bmax[1] + offset, bmin[2]}, {bmax[0], bmax[1] + offset, bmin[2]},
+            {bmax[0], bmax[1] + offset, bmax[2]}, {bmin[0], bmax[1] + offset, bmax[2]} };
+        float sx[8], sy[8];
+        bool corner_visible[8] = {};
+        int valid = 0;
+        float min_sx = FLT_MAX, max_sx = -FLT_MAX;
+        float min_sy = FLT_MAX, max_sy = -FLT_MAX;
+        for (int i = 0; i < 8; i++) {
+            if (projection::world_to_screen(corners[i][0], corners[i][1], corners[i][2], sx[i], sy[i])) {
+                corner_visible[i] = true;
+                if (sx[i] < min_sx) min_sx = sx[i];
+                if (sx[i] > max_sx) max_sx = sx[i];
+                if (sy[i] < min_sy) min_sy = sy[i];
+                if (sy[i] > max_sy) max_sy = sy[i];
+                valid++;
+            }
+        }
+        if (valid < 4) continue;
+        if (max_sx < -24.0f || min_sx > (float)sw + 24.0f || max_sy < -24.0f || min_sy > (float)sh + 24.0f) continue;
+        {
+            const flaway::projection::view_state& vs = flaway::projection::state();
+            float dx = (bmin[0] + bmax[0]) * 0.5f - vs.cam_pos[0];
+            float dy = (bmin[1] + bmax[1]) * 0.5f - vs.cam_pos[1];
+            float dz = (bmin[2] + bmax[2]) * 0.5f - vs.cam_pos[2];
+            dist_plates = sqrtf(dx * dx + dy * dy + dz * dz);
+        }
+        ImU32 c0 = entry.is_friend ? esp_friend : s_c0;
+        ImU32 c1 = entry.is_friend ? esp_friend_hi : s_c1;
+        const float box_rounding = 5.0f;
+        if (want_box) {
+            if (globals::esp_mode == 3) {
+                static const int edges[12][2] = { {0,1},{1,2},{2,3},{3,0},
+                    {4,5},{5,6},{6,7},{7,4}, {0,4},{1,5},{2,6},{3,7} };
+                float ytop = min_sy, ybot = max_sy;
+                if (ybot - ytop < 1.0f) ybot = ytop + 1.0f;
+                for (int e = 0; e < 12; e++) {
+                    int ia = edges[e][0], ib = edges[e][1];
+                    if (!corner_visible[ia] || !corner_visible[ib]) continue;
+                    dl->AddLine(ImVec2(sx[ia], sy[ia]), ImVec2(sx[ib], sy[ib]),
+                                IM_COL32(0, 0, 0, a_mul(alpha, 0.55f)), 4.4f);
+                }
+                for (int e = 0; e < 12; e++) {
+                    int ia = edges[e][0], ib = edges[e][1];
+                    if (!corner_visible[ia] || !corner_visible[ib]) continue;
+                    float t = (((sy[ia] - ytop) + (sy[ib] - ytop)) * 0.5f) / (ybot - ytop);
+                    dl->AddLine(ImVec2(sx[ia], sy[ia]), ImVec2(sx[ib], sy[ib]),
+                                hstyle::with_a(hstyle::lerp(c0, c1, t), alpha), 2.3f);
+                }
+            } else {
+                ImVec2 bp0(min_sx, min_sy), bp1(max_sx, max_sy);
+                if (globals::esp_mode == 0) draw_box_glow(dl, bp0, bp1, box_rounding, alpha, c0, c1);
+                if (globals::esp_mode == 2)  // "Box": faint tinted interior
+                    dl->AddRectFilled(bp0, bp1, hstyle::with_a(c0, a_mul(alpha, 0.08f)), box_rounding);
+                draw_grad_rect(dl, bp0, bp1, c0, c1, alpha, is_locked ? 3.2f : 2.5f, box_rounding);
+                if (is_locked)
+                    dl->AddRect(bp0, bp1, IM_COL32(255, 255, 255, a_mul(alpha, 0.85f)),
+                                box_rounding, 0, 1.0f);
+            }
+        }
+        if (want_tracer) {
+            draw_grad_line(dl, ImVec2((float)sw * 0.5f, (float)sh),
+                           ImVec2((min_sx + max_sx) * 0.5f, (min_sy + max_sy) * 0.5f),
+                           a_mul(alpha, 0.92f), 2.1f);
+        }
+        if (want_hp && entry.max_health > 0) {
+            float hp = entry.health / entry.max_health;
+            if (hp > 1.0f) hp = 1.0f;
+            if (hp < 0.0f) hp = 0.0f;
+            const float bw = 5.0f;
+            float bx = min_sx - bw - 5.0f;
+            float bh = max_sy - min_sy;
+            float fh = bh * hp;
+            dl->AddRectFilled(ImVec2(bx - 1.5f, min_sy - 1.5f), ImVec2(bx + bw + 1.5f, max_sy + 1.5f),
+                              IM_COL32(0, 0, 0, a_mul(alpha, 0.65f)), 3.5f);
+            dl->AddRectFilled(ImVec2(bx, min_sy), ImVec2(bx + bw, max_sy),
+                              hstyle::with_a(IM_COL32(34, 36, 44, 255), a_mul(alpha, 0.90f)), 2.5f);
+            if (fh > 0.5f) {
+                ImU32 fill = hstyle::lerp(IM_COL32(235, 74, 74, 255), c0, hp);
+                dl->AddRectFilled(ImVec2(bx, max_sy - fh), ImVec2(bx + bw, max_sy),
+                                  hstyle::with_a(fill, alpha), 2.5f);
+                dl->PushClipRect(ImVec2(bx, max_sy - fh), ImVec2(bx + bw, max_sy), true);
+                dl->AddRectFilled(ImVec2(bx + 0.5f, max_sy - fh),
+                                  ImVec2(bx + bw - 0.5f, max_sy - fh + 3.0f),
+                                  IM_COL32(255, 255, 255, a_mul(alpha, 0.55f)), 2.0f);
+                dl->PopClipRect();
+            }
+        }
+        float plate_x = (min_sx + max_sx) * 0.5f;
+        float plate_bottom = min_sy - 7.0f;
+        float plate_h = 0.0f;
+        if (want_name && !entry.name.empty() && dist_plates <= 96.0f) {
+            float phase = (float)((int)kv.first % 97) / 97.0f;
+            plate_h = draw_name_plate(dl, plate_x, plate_bottom, entry.name.c_str(), alpha, c0, c1, phase);
+        }
+        if (want_item && !entry.items.empty() && dist_plates <= 96.0f) {
+            // equipment row stacks above the name tag so nothing covers the box
+            float tiles_top = plate_h > 0.0f
+                                  ? plate_bottom - plate_h - 7.0f
+                                  : min_sy - 6.0f - 19.0f;
+            draw_entity_item_tiles(dl, plate_x, tiles_top, entry.items, alpha, c0, c1);
+        }
+    }
+    if (want_arrows) {
+        const flaway::projection::view_state& vs = flaway::projection::state();
+        if (vs.valid && hud_icons::png(pointer_png, pointer_png_size)) {
+            const float cx0 = (float)sw * 0.5f, cy0 = (float)sh * 0.5f;
+            float R = (float)(sw < sh ? sw : sh) * 0.30f;
+            if (R < 70.0f) R = 70.0f;
+            if (R > 150.0f) R = 150.0f;
+            const float yr = vs.yaw * (float)M_PI / 180.0;
+            const float fwx = -sinf(yr), fwz = cosf(yr);
+            const float rgx = -fwz, rgz = fwx;
+            const float m = 26.0f;
+            for (auto& kv : pc) {
+                esp_render_entry& entry = kv.second;
+                int alpha = compute_alpha(entry, ts);
+                if (alpha <= 0) continue;
+                double* cv = entry.smooth.current;
+                float dx = (float)(cv[0] - vs.cam_pos[0]);
+                float dz = (float)(cv[2] - vs.cam_pos[2]);
+                if (dx * dx + dz * dz < 4.0f) continue;
+                float px, py;
+                // On screen (with a margin) -> the box already tells you where
+                // it is; only the missing/off-screen targets get an arrow.
+                if (projection::world_to_screen(cv[0], cv[1] + 1.0, cv[2], px, py) &&
+                    px >= 16.0f && px <= (float)sw - 16.0f &&
+                    py >= 16.0f && py <= (float)sh - 16.0f)
+                    continue;
+                float bearing = atan2f(dx * rgx + dz * rgz, dx * fwx + dz * fwz);
+                float ax = cx0 + sinf(bearing) * R;
+                float ay = cy0 - cosf(bearing) * R;
+                if (ax < m) ax = m;
+                if (ax > (float)sw - m) ax = (float)sw - m;
+                if (ay < m) ay = m;
+                if (ay > (float)sh - m) ay = (float)sh - m;
+                draw_arrow(dl, ax, ay, 17.0f, bearing,
+                           entry.is_friend ? esp_friend : s_c0, alpha);
+            }
+        }
+    }
+    if (want_item) {
+        // Item plates are the most expensive ESP element: 3-layer shadow, gloss
+        // clip, 2 borders, two text passes and one GPU sweep each. Scan range is
+        // 64 blocks, so a loot pile can queue hundreds of them and eat the whole
+        // frame — only the nearest N get a plate (and everything is skipped
+        // outright when the feature is off).
+        constexpr int k_max_item_plates = 24;
+        struct item_cand { float d2; float sx, sy; int alpha; int id; const esp_render_entry* e; };
+        std::vector<item_cand> cs;
+        cs.reserve(ic.size());
+        const flaway::projection::view_state& vs = flaway::projection::state();
+        for (auto& kv : ic) {
+            const esp_render_entry& entry = kv.second;
+            int alpha = compute_alpha(entry, ts);
+            if (alpha <= 0 || entry.name.empty()) continue;
+            const double* cv = entry.smooth.current;
+            float ix = (float)cv[0], iy = (float)cv[1], iz = (float)cv[2];
+            if (vs.valid) {
+                float dx = ix - vs.cam_pos[0];
+                float dy = iy - vs.cam_pos[1];
+                float dz = iz - vs.cam_pos[2];
+                if (dx * vs.forward[0] + dy * vs.forward[1] + dz * vs.forward[2] < -0.5f) continue;
+            }
+            float sx, sy;
+            if (!projection::world_to_screen(ix, iy + 0.3f + offset, iz, sx, sy)) continue;
+            if (sx < -24.0f || sx > (float)sw + 24.0f || sy < -24.0f || sy > (float)sh + 24.0f) continue;
+            float d2 = 0.0f;
+            if (vs.valid) {
+                float dx = ix - vs.cam_pos[0], dy = iy - vs.cam_pos[1], dz = iz - vs.cam_pos[2];
+                d2 = dx * dx + dy * dy + dz * dz;
+            }
+            cs.push_back({d2, sx, sy, alpha, (int)kv.first, &entry});
+        }
+        if ((int)cs.size() > k_max_item_plates) {
+            std::nth_element(cs.begin(), cs.begin() + k_max_item_plates, cs.end(),
+                             [](const item_cand& a, const item_cand& b) { return a.d2 < b.d2; });
+            cs.resize(k_max_item_plates);
+        }
+        for (const item_cand& c : cs) {
+            float phase = (float)(c.id % 89) / 89.0f;
+            draw_item_plate(dl, c.sx, c.sy - 3.0f, c.e->name.c_str(),
+                            c.e->icon_r, c.e->icon_g, c.e->icon_b,
+                            c.alpha, s_c0, s_c1, phase);
+        }
+    }
+{ std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0) { it = g_players.erase(it); continue; } if (ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it !=
 g_items.end(); ) { if (it->second.last_seen_us <= 0) { it = g_items.erase(it); continue; } if (ts - it->second.last_seen_us > stale_threshold) it = g_items.erase(it); else ++it; } for (auto& kv : pc) { auto it = g_players.find(kv.first); if (it == g_players.end()) g_players.emplace(kv.first, std::move(kv.second)); else for (int i = 0; i < 9; i++) it->second.smooth.current[i] = kv.second.smooth.current[i]; } for (auto& kv : ic) { auto it = g_items.find(kv.first); if (it == g_items.end()) g_items.emplace(kv.first, std::move(kv.second)); else for (int i = 0; i < 9; i++) it->second.smooth.current
 [i] = kv.second.smooth.current[i]; } } } void flaway::modules::esp::cleanup() { g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); g_scan_cache.clear(); { std::lock_guard<std::mutex> lock(esp_mutex); g_pickups.clear(); } if (g_last_world) { if (flaway::instance) { if (auto env = flaway::instance->get_env()) env->DeleteGlobalRef(g_last_world); } g_last_world = nullptr; } } std::unordered_map<int, esp_render_entry> flaway::modules::esp::snapshot_players() { std::lock_guard<std::mutex> lock(esp_mutex); return g_players; } esp_camera_data flaway::modules::esp::camera() { std::
 lock_guard<std::mutex> lock(esp_mutex); return esp_cam; } bool flaway::modules::esp::snapshot_target(esp_render_entry& out) { std::lock_guard<std::mutex> lock(esp_mutex); for (auto& kv : g_players) { if (kv.second.is_target) { out = kv.second; return true; } } return false; } bool flaway::modules::esp::snapshot_entry(int id, esp_render_entry& out) { std::lock_guard<std::mutex> lock(esp_mutex); auto it = g_players.find(id); if (it == g_players.end()) return false; out = it->second; return true; } std::vector<esp_pickup_entry> flaway::modules::esp::pickups() { std::lock_guard<std::mutex> lock(

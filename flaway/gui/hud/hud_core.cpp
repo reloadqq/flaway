@@ -66,25 +66,34 @@ ImU32 hsl(float h, float s, float l, int a) {
 
 ImU32 accent() { return GUI::accent_a(); }
 
+// Gradient stops for every glass card / bar / ESP outline. With a theme
+// gradient preset selected the pair comes straight from the preset (still
+// slowly drifting so it stays alive); otherwise both stops are derived from
+// the current accent swatch, so a theme change in the menu recolors the HUD
+// and the ESP together.
 ImU32 grad_a(float phase) {
+    unsigned pa = 0, pb = 0;
+    bool preset = GUI::gradient_pair(&pa, &pb);
     float h, s, l;
-    rgb_to_hsl(GUI::accent_a(), h, s, l);
+    rgb_to_hsl(preset ? pa : GUI::accent_a(), h, s, l);
     float t = time_now();
     float drift = 0.045f * sinf(t * 0.6f + phase * 6.2831853f);
-    float ls = l < 0.42f ? 0.55f : l;
-    float ss = s < 0.55f ? 0.85f : s;
+    float ls = preset ? (l < 0.42f ? 0.42f : l) : (l < 0.42f ? 0.55f : l);
+    float ss = preset ? s : (s < 0.55f ? 0.85f : s);
     return hsl(h + drift, ss, ls, 255);
 }
 
 ImU32 grad_b(float phase) {
+    unsigned pa = 0, pb = 0;
+    bool preset = GUI::gradient_pair(&pa, &pb);
     float h, s, l;
-    rgb_to_hsl(GUI::accent_a(), h, s, l);
+    rgb_to_hsl(preset ? pb : GUI::accent_a(), h, s, l);
     float t = time_now();
     float drift = 0.055f * sinf(t * 0.6f + phase * 6.2831853f + 1.7f);
-    float ls = l + 0.10f;
+    float ls = l + (preset ? 0.0f : 0.10f);
     if (ls > 0.86f) ls = 0.86f;
-    float ss = s < 0.55f ? 0.80f : s;
-    return hsl(h + 0.14f + drift, ss, ls, 255);
+    float ss = preset ? s : (s < 0.55f ? 0.80f : s);
+    return hsl(h + (preset ? 0.0f : 0.14f) + drift, ss, ls, 255);
 }
 
 ImU32 grad(float t, float phase) { return lerp(grad_a(phase), grad_b(phase), t); }

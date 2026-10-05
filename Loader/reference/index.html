@@ -1,0 +1,3277 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>flaway dlc</title>
+
+<style>
+@font-face {
+    font-family: Monocraft;
+    src: url("Monocraft.woff2") format("woff2");
+}
+
+:root {
+    --accent: #a875ff;
+    --accent2: #6b35ff;
+    --rgb: 168,117,255;
+
+    --bg: #060609;
+    --text: #f5f5f7;
+    --muted: #858591;
+
+    --glass: rgba(17,17,24,.62);
+    --glass-light: rgba(255,255,255,.055);
+    --border: rgba(255,255,255,.085);
+
+    --mx: 50%;
+    --my: 50%;
+
+    --transition: .35s cubic-bezier(.2,.8,.2,1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: Monocraft, monospace;
+}
+
+/* =========================================================
+   BACKGROUND
+========================================================= */
+
+.background {
+    position: fixed;
+    inset: -55px;
+    z-index: -10;
+
+    background:
+        linear-gradient(
+            rgba(3,3,7,.64),
+            rgba(3,3,7,.9)
+        ),
+        url("background.jpg") center / cover no-repeat;
+
+    filter: blur(12px) saturate(.82);
+
+    transform:
+        translate3d(
+            calc((var(--mx) - 50%) * .055),
+            calc((var(--my) - 50%) * .055),
+            0
+        )
+        scale(1.09);
+
+    will-change: transform;
+}
+
+.background::after {
+    content: "";
+
+    position: absolute;
+    inset: 0;
+
+    background:
+        radial-gradient(
+            circle at 50% 45%,
+            rgba(var(--rgb),.13),
+            transparent 40%
+        ),
+        radial-gradient(
+            circle at 5% 95%,
+            rgba(var(--rgb),.07),
+            transparent 28%
+        );
+
+    transition: background 1.1s ease;
+}
+
+/* =========================================================
+   LIQUID BLOBS
+========================================================= */
+
+.blob {
+    position: fixed;
+    pointer-events: none;
+    z-index: -5;
+
+    border-radius: 50%;
+
+    background: var(--accent);
+    opacity: .13;
+
+    filter: blur(85px);
+
+    will-change: transform;
+
+    animation:
+        blobMove 13s ease-in-out infinite alternate;
+}
+
+.blob.one {
+    width: 330px;
+    height: 330px;
+    top: -110px;
+    left: 13%;
+}
+
+.blob.two {
+    width: 280px;
+    height: 280px;
+    right: 4%;
+    bottom: -100px;
+    animation-delay: -5s;
+}
+
+@keyframes blobMove {
+    from {
+        transform: translate3d(-25px,-15px,0) scale(1);
+    }
+
+    to {
+        transform: translate3d(30px,25px,0) scale(1.15);
+    }
+}
+
+/* =========================================================
+   NOISE
+========================================================= */
+
+.noise {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+
+    pointer-events: none;
+
+    opacity: .022;
+
+    background-image:
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* =========================================================
+   APP
+========================================================= */
+
+.app {
+    position: fixed;
+    inset: 0;
+
+    padding: 22px;
+
+    transition:
+        opacity .45s ease,
+        transform .45s cubic-bezier(.2,.8,.2,1);
+}
+
+.app.hidden-window {
+    opacity: 0;
+    transform: scale(.97) translateY(12px);
+    pointer-events: none;
+}
+
+.shell {
+    width: 100%;
+    height: 100%;
+
+    display: flex;
+
+    overflow: hidden;
+
+    border-radius: 28px;
+
+    border: 1px solid var(--border);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,.075),
+            rgba(255,255,255,.022)
+        );
+
+    backdrop-filter: blur(34px) saturate(150%);
+    -webkit-backdrop-filter: blur(34px) saturate(150%);
+
+    box-shadow:
+        0 35px 110px rgba(0,0,0,.58),
+        inset 0 1px rgba(255,255,255,.09);
+
+    position: relative;
+}
+
+/* =========================================================
+   WINDOW CONTROLS
+========================================================= */
+
+.window-controls {
+    position: absolute;
+
+    top: 17px;
+    right: 18px;
+
+    z-index: 50;
+
+    display: flex;
+    gap: 7px;
+}
+
+.window-btn {
+    width: 31px;
+    height: 31px;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 10px;
+
+    border: 1px solid rgba(255,255,255,.07);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,.07),
+            rgba(255,255,255,.025)
+        );
+
+    color: #9999a3;
+
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+
+    cursor: pointer;
+
+    position: relative;
+    overflow: hidden;
+
+    transition:
+        transform .25s ease,
+        color .25s ease,
+        border-color .25s ease,
+        background .25s ease,
+        box-shadow .25s ease;
+}
+
+.window-btn::before {
+    content: "";
+
+    position: absolute;
+
+    width: 80px;
+    height: 80px;
+
+    left: -65px;
+    top: -25px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255,255,255,.2),
+            transparent
+        );
+
+    transform: rotate(25deg);
+
+    transition: left .45s ease;
+}
+
+.window-btn:hover::before {
+    left: 45px;
+}
+
+.window-btn:hover {
+    color: white;
+
+    transform:
+        translateY(-2px)
+        scale(1.04);
+
+    border-color:
+        rgba(var(--rgb),.3);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--rgb),.14),
+            rgba(255,255,255,.035)
+        );
+
+    box-shadow:
+        0 7px 22px rgba(var(--rgb),.13);
+}
+
+.window-btn.close:hover {
+    color: #ff7b96;
+
+    border-color: rgba(255,90,120,.25);
+
+    box-shadow:
+        0 7px 22px rgba(255,70,100,.1);
+}
+
+/* =========================================================
+   SIDEBAR
+========================================================= */
+
+.sidebar {
+    width: 245px;
+    min-width: 245px;
+
+    height: 100%;
+
+    padding: 25px 17px;
+
+    border-right:
+        1px solid rgba(255,255,255,.06);
+
+    background:
+        linear-gradient(
+            180deg,
+            rgba(255,255,255,.045),
+            rgba(255,255,255,.012)
+        );
+
+    display: flex;
+    flex-direction: column;
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    padding: 2px 9px 30px;
+}
+
+.logo-icon {
+    width: 39px;
+    height: 39px;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 12px;
+
+    color: white;
+
+    font-size: 20px;
+    font-weight: 900;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--accent),
+            var(--accent2)
+        );
+
+    background-size: 180% 180%;
+
+    box-shadow:
+        0 0 30px rgba(var(--rgb),.3),
+        inset 0 1px rgba(255,255,255,.35);
+
+    animation: gradientFlow 5s ease infinite;
+
+    transition:
+        background .9s ease,
+        box-shadow .9s ease;
+}
+
+@keyframes gradientFlow {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.logo-text {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.logo-text span {
+    color: var(--accent);
+    transition: color .8s ease;
+}
+
+/* =========================================================
+   NAV BUTTONS
+========================================================= */
+
+.nav {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.nav button {
+    position: relative;
+    overflow: hidden;
+
+    width: 100%;
+    height: 48px;
+
+    display: flex;
+    align-items: center;
+
+    gap: 12px;
+
+    padding: 0 14px;
+
+    border-radius: 14px;
+    border: 1px solid transparent;
+
+    background: transparent;
+
+    color: #85858f;
+
+    font-family: inherit;
+    font-size: 12px;
+
+    cursor: pointer;
+
+    transition:
+        color .3s ease,
+        transform .3s ease,
+        border-color .3s ease,
+        background .3s ease,
+        box-shadow .3s ease;
+}
+
+.nav button::before {
+    content: "";
+
+    position: absolute;
+
+    width: 120px;
+    height: 100%;
+
+    top: 0;
+    left: -150px;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255,255,255,.07),
+            transparent
+        );
+
+    transform: skewX(-20deg);
+
+    transition: left .55s ease;
+}
+
+.nav button:hover::before,
+.nav button.active::before {
+    left: 130%;
+}
+
+.nav button:hover {
+    color: white;
+
+    transform: translateX(2px);
+
+    background:
+        rgba(255,255,255,.045);
+}
+
+.nav button.active {
+    color: white;
+
+    border-color:
+        rgba(var(--rgb),.2);
+
+    background:
+        linear-gradient(
+            100deg,
+            rgba(var(--rgb),.17),
+            rgba(var(--rgb),.035)
+        );
+
+    box-shadow:
+        inset 0 0 25px rgba(var(--rgb),.035),
+        0 6px 25px rgba(var(--rgb),.07);
+}
+
+.nav-icon {
+    width: 23px;
+
+    text-align: center;
+
+    font-size: 15px;
+}
+
+.settings-icon {
+    transition:
+        transform .65s cubic-bezier(.2,.8,.2,1);
+}
+
+.nav button:hover .settings-icon {
+    transform: rotate(110deg);
+}
+
+/* =========================================================
+   DOWNLOAD BUTTON
+========================================================= */
+
+.download {
+    position: relative;
+    overflow: hidden;
+
+    margin-top: 18px;
+
+    height: 48px;
+
+    border-radius: 14px;
+
+    border:
+        1px solid rgba(var(--rgb),.22);
+
+    color: white;
+
+    background:
+        linear-gradient(
+            115deg,
+            rgba(var(--rgb),.18),
+            rgba(255,255,255,.035),
+            rgba(var(--rgb),.12)
+        );
+
+    background-size: 220% 100%;
+
+    font-family: inherit;
+    font-size: 11px;
+
+    cursor: pointer;
+
+    animation:
+        buttonGradient 5s ease infinite;
+
+    transition:
+        transform .3s ease,
+        box-shadow .3s ease,
+        border-color .3s ease;
+}
+
+.download::before,
+.inject::before {
+    content: "";
+
+    position: absolute;
+
+    width: 150px;
+    height: 180%;
+
+    left: -170px;
+    top: -40%;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255,255,255,.18),
+            transparent
+        );
+
+    transform: rotate(20deg);
+
+    transition: left .65s ease;
+}
+
+.download:hover::before,
+.inject:hover::before {
+    left: 120%;
+}
+
+.download:hover {
+    transform:
+        translateY(-3px)
+        scale(1.01);
+
+    border-color:
+        rgba(var(--rgb),.4);
+
+    box-shadow:
+        0 12px 35px rgba(var(--rgb),.17);
+}
+
+@keyframes buttonGradient {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+/* =========================================================
+   PROFILE
+========================================================= */
+
+.profile {
+    margin-top: auto;
+
+    display: flex;
+    align-items: center;
+
+    gap: 11px;
+
+    padding: 11px;
+
+    border-radius: 17px;
+
+    background:
+        rgba(255,255,255,.035);
+
+    border:
+        1px solid rgba(255,255,255,.06);
+
+    transition:
+        border-color .3s ease,
+        transform .3s ease;
+}
+
+.profile:hover {
+    transform: translateY(-2px);
+
+    border-color:
+        rgba(var(--rgb),.17);
+}
+
+.avatar {
+    width: 39px;
+    height: 39px;
+
+    object-fit: cover;
+
+    border-radius: 12px;
+
+    border:
+        1px solid rgba(255,255,255,.1);
+}
+
+.profile-name {
+    font-size: 11px;
+}
+
+.profile-status {
+    margin-top: 4px;
+
+    color: #777780;
+
+    font-size: 8px;
+}
+
+.online {
+    display: inline-block;
+
+    width: 6px;
+    height: 6px;
+
+    margin-right: 5px;
+
+    border-radius: 50%;
+
+    background: #65e58d;
+
+    box-shadow:
+        0 0 10px #65e58d;
+
+    animation: onlinePulse 2s infinite;
+}
+
+@keyframes onlinePulse {
+    50% {
+        opacity: .45;
+        transform: scale(.75);
+    }
+}
+
+/* =========================================================
+   CONTENT
+========================================================= */
+
+.content {
+    flex: 1;
+    min-width: 0;
+
+    position: relative;
+
+    overflow: hidden;
+}
+
+.page {
+    width: 100%;
+    height: 100%;
+
+    padding: 42px 48px;
+
+    overflow-y: auto;
+
+    animation:
+        pageIn .4s ease;
+}
+
+.page::-webkit-scrollbar {
+    width: 4px;
+}
+
+.page::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.1);
+    border-radius: 20px;
+}
+
+@keyframes pageIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =========================================================
+   HEADER
+========================================================= */
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+
+    margin-bottom: 32px;
+}
+
+.eyebrow {
+    color: var(--accent);
+
+    font-size: 9px;
+    letter-spacing: 2px;
+
+    margin-bottom: 10px;
+
+    transition:
+        color .8s ease;
+}
+
+.title {
+    font-size: clamp(25px,3vw,38px);
+
+    letter-spacing: -1.5px;
+}
+
+.subtitle {
+    color: var(--muted);
+
+    font-size: 10px;
+
+    margin-top: 10px;
+}
+
+.status {
+    display: flex;
+    align-items: center;
+
+    gap: 7px;
+
+    padding: 9px 13px;
+
+    border-radius: 30px;
+
+    background:
+        rgba(255,255,255,.035);
+
+    border:
+        1px solid rgba(255,255,255,.07);
+
+    font-size: 8px;
+}
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero {
+    position: relative;
+    overflow: hidden;
+
+    min-height: 205px;
+
+    padding: 32px;
+
+    border-radius: 23px;
+
+    border:
+        1px solid rgba(255,255,255,.085);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--rgb),.11),
+            rgba(255,255,255,.025) 52%,
+            rgba(0,0,0,.1)
+        );
+
+    background-size: 170% 170%;
+
+    animation:
+        heroGradient 8s ease infinite;
+
+    backdrop-filter: blur(25px);
+
+    box-shadow:
+        inset 0 1px rgba(255,255,255,.08),
+        0 25px 60px rgba(0,0,0,.2);
+
+    transition:
+        border-color .8s ease,
+        box-shadow .8s ease;
+}
+
+@keyframes heroGradient {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.hero::before {
+    content: "";
+
+    position: absolute;
+
+    width: 500px;
+    height: 500px;
+
+    right: -220px;
+    top: -280px;
+
+    border-radius: 50%;
+
+    background: var(--accent);
+
+    opacity: .075;
+
+    filter: blur(30px);
+
+    transition:
+        background 1s ease;
+}
+
+.hero::after {
+    content: "";
+
+    position: absolute;
+    inset: 0;
+
+    background:
+        linear-gradient(
+            115deg,
+            transparent 35%,
+            rgba(255,255,255,.045),
+            transparent 65%
+        );
+
+    transform:
+        translateX(-120%);
+
+    animation:
+        glassSweep 7s infinite ease-in-out;
+}
+
+@keyframes glassSweep {
+    55%,
+    100% {
+        transform: translateX(120%);
+    }
+}
+
+.hero-content {
+    position: relative;
+    z-index: 2;
+}
+
+.hero h2 {
+    font-size: clamp(25px,3vw,42px);
+
+    letter-spacing: -2px;
+}
+
+.hero h2 span {
+    color: var(--accent);
+
+    transition:
+        color .8s ease;
+}
+
+.hero p {
+    max-width: 560px;
+
+    margin-top: 15px;
+
+    color: #898993;
+
+    font-size: 10px;
+
+    line-height: 1.9;
+}
+
+/* =========================================================
+   SECTION
+========================================================= */
+
+.section-title {
+    margin: 30px 0 15px;
+
+    color: #aaaab2;
+
+    font-size: 11px;
+}
+
+/* =========================================================
+   VERSION CARDS
+========================================================= */
+
+.versions {
+    display: grid;
+
+    grid-template-columns:
+        repeat(2,minmax(0,1fr));
+
+    gap: 16px;
+}
+
+.version {
+    position: relative;
+    overflow: hidden;
+
+    min-height: 210px;
+
+    border-radius: 21px;
+
+    border:
+        1px solid rgba(255,255,255,.07);
+
+    cursor: pointer;
+
+    transform: translateZ(0);
+
+    transition:
+        transform .35s cubic-bezier(.2,.8,.2,1),
+        border-color .5s ease,
+        box-shadow .5s ease;
+}
+
+.version:hover {
+    transform:
+        translateY(-5px)
+        perspective(800px)
+        rotateX(1deg);
+
+    border-color:
+        rgba(var(--rgb),.32);
+
+    box-shadow:
+        0 20px 50px rgba(0,0,0,.3),
+        0 0 30px rgba(var(--rgb),.07);
+}
+
+.version.selected {
+    border-color:
+        rgba(var(--rgb),.55);
+
+    box-shadow:
+        0 0 0 1px rgba(var(--rgb),.12),
+        0 20px 60px rgba(var(--rgb),.12);
+}
+
+.version-bg {
+    position: absolute;
+    inset: 0;
+
+    background-size: cover;
+    background-position: center;
+
+    filter:
+        brightness(.42)
+        saturate(.75);
+
+    transition:
+        transform .7s cubic-bezier(.2,.8,.2,1);
+}
+
+.version:hover .version-bg {
+    transform: scale(1.06);
+}
+
+.version-bg::after {
+    content: "";
+
+    position: absolute;
+    inset: 0;
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(0,0,0,.12),
+            rgba(0,0,0,.85)
+        );
+}
+
+.version-line {
+    position: absolute;
+
+    width: 150%;
+    height: 1px;
+
+    top: 45%;
+    left: -20%;
+
+    background:
+        linear-gradient(
+            90deg,
+            transparent,
+            rgba(255,255,255,.12),
+            transparent
+        );
+
+    transform: rotate(-18deg);
+}
+
+.version-content {
+    position: relative;
+    z-index: 2;
+
+    height: 100%;
+
+    padding: 22px;
+
+    display: flex;
+    flex-direction: column;
+}
+
+.version-tag {
+    width: max-content;
+
+    padding: 5px 8px;
+
+    border-radius: 7px;
+
+    color: #bcbcc5;
+
+    background:
+        rgba(255,255,255,.07);
+
+    font-size: 7px;
+}
+
+.version h3 {
+    margin-top: auto;
+
+    font-size: 19px;
+}
+
+.version p {
+    margin-top: 7px;
+
+    color: #878791;
+
+    font-size: 8px;
+}
+
+.check {
+    position: absolute;
+
+    top: 19px;
+    right: 19px;
+
+    width: 25px;
+    height: 25px;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 50%;
+
+    background:
+        rgba(0,0,0,.3);
+
+    border:
+        1px solid rgba(255,255,255,.08);
+
+    color: transparent;
+
+    font-size: 10px;
+
+    transition:
+        background .45s ease,
+        color .3s ease,
+        box-shadow .45s ease,
+        transform .3s ease;
+}
+
+.version.selected .check {
+    color: white;
+
+    background:
+        var(--accent);
+
+    border-color: transparent;
+
+    box-shadow:
+        0 0 20px rgba(var(--rgb),.4);
+
+    transform: scale(1.04);
+}
+
+/* =========================================================
+   ACTION ROW
+========================================================= */
+
+.action-row {
+    margin-top: 17px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    padding: 17px 19px;
+
+    border-radius: 17px;
+
+    background:
+        rgba(255,255,255,.035);
+
+    border:
+        1px solid rgba(255,255,255,.06);
+
+    transition:
+        border-color .5s ease;
+}
+
+.action-row:hover {
+    border-color:
+        rgba(var(--rgb),.16);
+}
+
+.selected-info {
+    display: flex;
+    align-items: center;
+
+    gap: 11px;
+}
+
+.selected-dot {
+    width: 8px;
+    height: 8px;
+
+    border-radius: 50%;
+
+    background:
+        var(--accent);
+
+    box-shadow:
+        0 0 14px rgba(var(--rgb),.7);
+
+    transition:
+        background .8s ease,
+        box-shadow .8s ease;
+}
+
+.selected-info strong {
+    display: block;
+
+    font-size: 10px;
+}
+
+.selected-info span {
+    display: block;
+
+    margin-top: 4px;
+
+    color: #777780;
+
+    font-size: 7px;
+}
+
+/* TEXT TRANSITION */
+
+.text-swap {
+    animation:
+        textSwap .42s ease;
+}
+
+@keyframes textSwap {
+    0% {
+        opacity: 0;
+        transform: translateY(5px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* =========================================================
+   INJECT BUTTON
+========================================================= */
+
+.inject {
+    position: relative;
+    overflow: hidden;
+
+    min-width: 145px;
+    height: 43px;
+
+    border: 0;
+    border-radius: 12px;
+
+    color: white;
+
+    background:
+        linear-gradient(
+            115deg,
+            var(--accent),
+            var(--accent2),
+            var(--accent)
+        );
+
+    background-size: 220% 100%;
+
+    font-family: inherit;
+    font-size: 9px;
+
+    cursor: pointer;
+
+    animation:
+        buttonGradient 5s ease infinite;
+
+    box-shadow:
+        0 10px 30px rgba(var(--rgb),.18);
+
+    transition:
+        transform .3s ease,
+        box-shadow .35s ease;
+}
+
+.inject:hover {
+    transform:
+        translateY(-3px)
+        scale(1.025);
+
+    box-shadow:
+        0 14px 38px rgba(var(--rgb),.3);
+}
+
+.inject:active {
+    transform: scale(.97);
+}
+
+/* =========================================================
+   SUBSCRIPTION
+========================================================= */
+
+.plan {
+    padding: 30px;
+
+    border-radius: 22px;
+
+    border:
+        1px solid rgba(var(--rgb),.22);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(var(--rgb),.11),
+            rgba(255,255,255,.025)
+        );
+
+    box-shadow:
+        inset 0 1px rgba(255,255,255,.06);
+}
+
+.plan-top {
+    display: flex;
+    justify-content: space-between;
+}
+
+.plan-name {
+    font-size: 22px;
+}
+
+.badge {
+    height: max-content;
+
+    padding: 7px 10px;
+
+    border-radius: 9px;
+
+    color: var(--accent);
+
+    background:
+        rgba(var(--rgb),.1);
+
+    font-size: 7px;
+
+    transition:
+        color .8s ease,
+        background .8s ease;
+}
+
+.features {
+    display: grid;
+
+    grid-template-columns:
+        repeat(3,1fr);
+
+    gap: 10px;
+
+    margin-top: 30px;
+}
+
+.feature {
+    padding: 16px;
+
+    border-radius: 14px;
+
+    background:
+        rgba(255,255,255,.035);
+
+    border:
+        1px solid rgba(255,255,255,.05);
+
+    color: #9999a2;
+
+    font-size: 8px;
+
+    transition:
+        transform .3s ease,
+        border-color .3s ease;
+}
+
+.feature:hover {
+    transform: translateY(-3px);
+
+    border-color:
+        rgba(var(--rgb),.18);
+}
+
+.feature b {
+    display: block;
+
+    color: white;
+
+    font-size: 11px;
+
+    margin-bottom: 7px;
+}
+
+/* =========================================================
+   SETTINGS
+========================================================= */
+
+.settings-grid {
+    display: grid;
+
+    grid-template-columns:
+        repeat(2,1fr);
+
+    gap: 15px;
+}
+
+.setting-card {
+    padding: 22px;
+
+    border-radius: 18px;
+
+    border:
+        1px solid rgba(255,255,255,.065);
+
+    background:
+        rgba(255,255,255,.035);
+}
+
+.setting-card h3 {
+    font-size: 11px;
+}
+
+.setting-card p {
+    margin-top: 7px;
+
+    color: #777780;
+
+    font-size: 8px;
+
+    line-height: 1.7;
+}
+
+.themes {
+    display: flex;
+    gap: 10px;
+
+    margin-top: 20px;
+}
+
+.theme {
+    width: 34px;
+    height: 34px;
+
+    border-radius: 10px;
+
+    border: 2px solid transparent;
+
+    cursor: pointer;
+
+    transition:
+        transform .3s ease,
+        border-color .3s ease,
+        box-shadow .4s ease;
+}
+
+.theme:hover {
+    transform:
+        translateY(-3px)
+        scale(1.05);
+}
+
+.theme.active {
+    border-color: white;
+
+    box-shadow:
+        0 0 20px var(--theme);
+}
+
+.toggle-row {
+    margin-top: 17px;
+
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+
+    color: #aaaab3;
+
+    font-size: 9px;
+}
+
+.toggle {
+    width: 39px;
+    height: 22px;
+
+    padding: 3px;
+
+    border-radius: 20px;
+
+    background:
+        rgba(255,255,255,.1);
+
+    cursor: pointer;
+
+    transition:
+        background .4s ease;
+}
+
+.toggle span {
+    display: block;
+
+    width: 16px;
+    height: 16px;
+
+    border-radius: 50%;
+
+    background: #777;
+
+    transition:
+        transform .3s ease,
+        background .4s ease;
+}
+
+.toggle.on {
+    background:
+        rgba(var(--rgb),.35);
+}
+
+.toggle.on span {
+    transform: translateX(17px);
+
+    background:
+        var(--accent);
+
+    box-shadow:
+        0 0 12px rgba(var(--rgb),.5);
+}
+
+/* =========================================================
+   TOAST
+========================================================= */
+
+.toast {
+    position: fixed;
+
+    top: 25px;
+    right: 25px;
+
+    z-index: 300;
+
+    min-width: 260px;
+
+    padding: 15px 17px;
+
+    border-radius: 15px;
+
+    border:
+        1px solid rgba(var(--rgb),.2);
+
+    background:
+        rgba(20,20,27,.72);
+
+    backdrop-filter:
+        blur(25px);
+
+    box-shadow:
+        0 20px 50px rgba(0,0,0,.4);
+
+    transform:
+        translateX(130%);
+
+    transition:
+        transform .45s cubic-bezier(.2,.8,.2,1),
+        border-color .7s ease;
+}
+
+.toast.show {
+    transform:
+        translateX(0);
+}
+
+.toast-title {
+    font-size: 10px;
+}
+
+.toast-text {
+    margin-top: 6px;
+
+    color: #85858f;
+
+    font-size: 8px;
+}
+
+/* =========================================================
+   INJECT OVERLAY
+========================================================= */
+
+.inject-overlay {
+    position: fixed;
+    inset: 0;
+
+    z-index: 400;
+
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background:
+        rgba(2,2,5,.5);
+
+    backdrop-filter:
+        blur(20px);
+
+    opacity: 0;
+    visibility: hidden;
+
+    transition:
+        opacity .35s ease,
+        visibility .35s ease;
+}
+
+.inject-overlay.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.inject-box {
+    width: 330px;
+
+    padding: 30px;
+
+    text-align: center;
+
+    border-radius: 22px;
+
+    border:
+        1px solid rgba(255,255,255,.09);
+
+    background:
+        linear-gradient(
+            135deg,
+            rgba(255,255,255,.07),
+            rgba(255,255,255,.025)
+        );
+
+    box-shadow:
+        0 30px 80px rgba(0,0,0,.5);
+
+    animation:
+        injectBoxIn .4s cubic-bezier(.2,.8,.2,1);
+}
+
+@keyframes injectBoxIn {
+    from {
+        opacity: 0;
+        transform: scale(.92) translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.inject-spinner {
+    width: 45px;
+    height: 45px;
+
+    margin: 0 auto 20px;
+
+    border-radius: 50%;
+
+    border:
+        2px solid rgba(255,255,255,.08);
+
+    border-top-color:
+        var(--accent);
+
+    animation:
+        spin .8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.inject-box h2 {
+    font-size: 14px;
+}
+
+.inject-box p {
+    margin-top: 8px;
+
+    color: #777780;
+
+    font-size: 8px;
+
+    min-height: 12px;
+
+    transition:
+        opacity .2s ease,
+        transform .2s ease;
+}
+
+.inject-text-change {
+    animation:
+        textSwap .35s ease;
+}
+
+/* =========================================================
+   BOOT
+========================================================= */
+
+.loader-screen {
+    position: fixed;
+    inset: 0;
+
+    z-index: 500;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(var(--rgb),.11),
+            transparent 35%
+        ),
+        #060609;
+
+    transition:
+        opacity .6s ease,
+        visibility .6s ease;
+}
+
+.loader-screen.hidden {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.loader-logo {
+    width: 70px;
+    height: 70px;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 20px;
+
+    font-size: 30px;
+    font-weight: 900;
+
+    background:
+        linear-gradient(
+            135deg,
+            var(--accent),
+            var(--accent2)
+        );
+
+    box-shadow:
+        0 0 70px rgba(var(--rgb),.3);
+
+    animation:
+        loaderPulse 2s ease-in-out infinite;
+}
+
+@keyframes loaderPulse {
+    50% {
+        transform: scale(1.04);
+        box-shadow:
+            0 0 90px rgba(var(--rgb),.42);
+    }
+}
+
+.loader-name {
+    margin-top: 20px;
+
+    font-size: 17px;
+}
+
+.loader-text {
+    margin-top: 8px;
+
+    color: #666671;
+
+    font-size: 8px;
+}
+
+.loading-bar {
+    width: 170px;
+    height: 3px;
+
+    margin-top: 25px;
+
+    overflow: hidden;
+
+    border-radius: 10px;
+
+    background:
+        rgba(255,255,255,.07);
+}
+
+.loading-bar span {
+    display: block;
+
+    width: 35%;
+    height: 100%;
+
+    border-radius: inherit;
+
+    background:
+        var(--accent);
+
+    box-shadow:
+        0 0 15px var(--accent);
+
+    animation:
+        loading 1.2s infinite ease-in-out;
+}
+
+@keyframes loading {
+    0% {
+        transform: translateX(-120%);
+    }
+
+    100% {
+        transform: translateX(500%);
+    }
+}
+
+/* =========================================================
+   HIDDEN WINDOW RETURN
+========================================================= */
+
+.restore-window {
+    position: fixed;
+
+    left: 22px;
+    bottom: 22px;
+
+    z-index: 450;
+
+    width: 45px;
+    height: 45px;
+
+    display: grid;
+    place-items: center;
+
+    border-radius: 14px;
+
+    border:
+        1px solid rgba(var(--rgb),.25);
+
+    background:
+        rgba(20,20,28,.7);
+
+    color: white;
+
+    font-family: inherit;
+
+    cursor: pointer;
+
+    opacity: 0;
+    pointer-events: none;
+
+    transform:
+        translateY(15px);
+
+    transition:
+        opacity .35s ease,
+        transform .35s ease,
+        box-shadow .3s ease;
+}
+
+.restore-window.visible {
+    opacity: 1;
+    pointer-events: auto;
+
+    transform:
+        translateY(0);
+}
+
+.restore-window:hover {
+    box-shadow:
+        0 10px 30px rgba(var(--rgb),.25);
+
+    transform:
+        translateY(-3px);
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:900px) {
+
+    .sidebar {
+        width: 190px;
+        min-width: 190px;
+    }
+
+    .page {
+        padding: 30px;
+    }
+
+    .versions {
+        grid-template-columns: 1fr;
+    }
+
+    .features,
+    .settings-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media(max-width:650px) {
+
+    .app {
+        padding: 0;
+    }
+
+    .shell {
+        border-radius: 0;
+    }
+
+    .sidebar {
+        width: 70px;
+        min-width: 70px;
+
+        padding:
+            15px 9px;
+    }
+
+    .logo-text,
+    .nav button span,
+    .download,
+    .profile-name,
+    .profile-status {
+        display: none;
+    }
+
+    .logo {
+        justify-content: center;
+        padding: 5px 0 25px;
+    }
+
+    .nav button {
+        justify-content: center;
+        padding: 0;
+    }
+
+    .profile {
+        justify-content: center;
+    }
+
+    .page {
+        padding: 25px 18px;
+    }
+
+    .window-controls {
+        top: 10px;
+        right: 10px;
+    }
+
+    .action-row {
+        gap: 15px;
+    }
+
+    .inject {
+        min-width: 115px;
+    }
+}
+
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
+
+@media(prefers-reduced-motion:reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
+}
+</style>
+</head>
+
+<body>
+
+<div class="background"></div>
+
+<div class="blob one"></div>
+<div class="blob two"></div>
+
+<div class="noise"></div>
+
+<!-- =======================================================
+     BOOT
+======================================================== -->
+
+<div class="loader-screen" id="boot">
+
+    <div class="loader-logo">
+        F
+    </div>
+
+    <div class="loader-name">
+        flaway dlc
+    </div>
+
+    <div class="loader-text">
+        loading interface...
+    </div>
+
+    <div class="loading-bar">
+        <span></span>
+    </div>
+
+</div>
+
+<!-- =======================================================
+     APP
+======================================================== -->
+
+<div class="app" id="app">
+
+    <div class="shell">
+
+        <!-- WINDOW CONTROLS -->
+
+        <div class="window-controls">
+
+            <button
+                class="window-btn"
+                id="minimize"
+                aria-label="Minimize"
+            >
+                —
+            </button>
+
+            <button
+                class="window-btn close"
+                id="close"
+                aria-label="Close"
+            >
+                ×
+            </button>
+
+        </div>
+
+        <!-- SIDEBAR -->
+
+        <aside class="sidebar">
+
+            <div class="logo">
+
+                <div class="logo-icon">
+                    F
+                </div>
+
+                <div class="logo-text">
+                    flaway <span>dlc</span>
+                </div>
+
+            </div>
+
+            <nav class="nav">
+
+                <button
+                    class="active"
+                    data-page="home"
+                >
+                    <div class="nav-icon">
+                        ⌂
+                    </div>
+
+                    <span>
+                        Home
+                    </span>
+                </button>
+
+                <button
+                    data-page="subscription"
+                >
+                    <div class="nav-icon">
+                        ◈
+                    </div>
+
+                    <span>
+                        Subscription
+                    </span>
+                </button>
+
+                <button
+                    data-page="settings"
+                >
+                    <div class="nav-icon settings-icon">
+                        ⚙
+                    </div>
+
+                    <span>
+                        Settings
+                    </span>
+                </button>
+
+            </nav>
+
+            <button
+                class="download"
+                id="download"
+            >
+                ↓ &nbsp; Download
+            </button>
+
+            <div class="profile">
+
+                <img
+                    class="avatar"
+                    src="profile.jpg"
+                    alt=""
+                >
+
+                <div>
+
+                    <div class="profile-name">
+                        flaway dlc
+                    </div>
+
+                    <div class="profile-status">
+                        <i class="online"></i>
+                        premium
+                    </div>
+
+                </div>
+
+            </div>
+
+        </aside>
+
+        <!-- CONTENT -->
+
+        <main class="content">
+
+            <!-- HOME -->
+
+            <section
+                class="page"
+                id="home"
+            >
+
+                <header class="header">
+
+                    <div>
+
+                        <div class="eyebrow">
+                            FLaway / HOME
+                        </div>
+
+                        <h1 class="title">
+                            Welcome back.
+                        </h1>
+
+                        <p class="subtitle">
+                            Choose your version and continue.
+                        </p>
+
+                    </div>
+
+                    <div class="status">
+                        <i class="online"></i>
+                        Online
+                    </div>
+
+                </header>
+
+                <div class="hero">
+
+                    <div class="hero-content">
+
+                        <div class="eyebrow">
+                            PREMIUM LOADER
+                        </div>
+
+                        <h2>
+                            FLaway <span>DLC</span>
+                        </h2>
+
+                        <p>
+                            Your workspace, your control.
+                            Select a version below and launch
+                            the loader with a clean liquid-glass
+                            interface.
+                        </p>
+
+                    </div>
+
+                </div>
+
+                <div class="section-title">
+                    Available versions
+                </div>
+
+                <div class="versions">
+
+                    <div
+                        class="version selected"
+                        data-version="DLC"
+                    >
+
+                        <div
+                            class="version-bg"
+                            style="background-image:url('dlc.jpg')"
+                        ></div>
+
+                        <div class="version-line"></div>
+
+                        <div class="version-content">
+
+                            <div class="version-tag">
+                                STABLE
+                            </div>
+
+                            <h3>
+                                DLC
+                            </h3>
+
+                            <p>
+                                Recommended version
+                            </p>
+
+                        </div>
+
+                        <div class="check">
+                            ✓
+                        </div>
+
+                    </div>
+
+                    <div
+                        class="version"
+                        data-version="Beta"
+                    >
+
+                        <div
+                            class="version-bg"
+                            style="background-image:url('beta.jpg')"
+                        ></div>
+
+                        <div class="version-line"></div>
+
+                        <div class="version-content">
+
+                            <div class="version-tag">
+                                EXPERIMENTAL
+                            </div>
+
+                            <h3>
+                                Beta
+                            </h3>
+
+                            <p>
+                                New features & testing
+                            </p>
+
+                        </div>
+
+                        <div class="check">
+                            ✓
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="action-row">
+
+                    <div class="selected-info">
+
+                        <div class="selected-dot"></div>
+
+                        <div>
+
+                            <strong
+                                id="selectedText"
+                            >
+                                DLC selected
+                            </strong>
+
+                            <span>
+                                Ready to inject
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                    <button
+                        class="inject"
+                        id="inject"
+                    >
+                        Inject
+                    </button>
+
+                </div>
+
+            </section>
+
+            <!-- SUBSCRIPTION -->
+
+            <section
+                class="page"
+                id="subscription"
+                style="display:none"
+            >
+
+                <header class="header">
+
+                    <div>
+
+                        <div class="eyebrow">
+                            FLaway / SUBSCRIPTION
+                        </div>
+
+                        <h1 class="title">
+                            Subscription
+                        </h1>
+
+                        <p class="subtitle">
+                            Your current access and features.
+                        </p>
+
+                    </div>
+
+                </header>
+
+                <div class="plan">
+
+                    <div class="plan-top">
+
+                        <div>
+
+                            <div class="eyebrow">
+                                CURRENT PLAN
+                            </div>
+
+                            <div class="plan-name">
+                                flaway DLC
+                            </div>
+
+                        </div>
+
+                        <div class="badge">
+                            PREMIUM
+                        </div>
+
+                    </div>
+
+                    <div class="features">
+
+                        <div class="feature">
+                            <b>∞</b>
+                            Unlimited access
+                        </div>
+
+                        <div class="feature">
+                            <b>⚡</b>
+                            Fast injection
+                        </div>
+
+                        <div class="feature">
+                            <b>◈</b>
+                            Premium builds
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="section-title">
+                    Select version
+                </div>
+
+                <div class="versions">
+
+                    <div
+                        class="version selected"
+                        data-version="DLC"
+                    >
+
+                        <div
+                            class="version-bg"
+                            style="background-image:url('dlc.jpg')"
+                        ></div>
+
+                        <div class="version-line"></div>
+
+                        <div class="version-content">
+
+                            <div class="version-tag">
+                                STABLE
+                            </div>
+
+                            <h3>
+                                DLC
+                            </h3>
+
+                            <p>
+                                Recommended version
+                            </p>
+
+                        </div>
+
+                        <div class="check">
+                            ✓
+                        </div>
+
+                    </div>
+
+                    <div
+                        class="version"
+                        data-version="Beta"
+                    >
+
+                        <div
+                            class="version-bg"
+                            style="background-image:url('beta.jpg')"
+                        ></div>
+
+                        <div class="version-line"></div>
+
+                        <div class="version-content">
+
+                            <div class="version-tag">
+                                EXPERIMENTAL
+                            </div>
+
+                            <h3>
+                                Beta
+                            </h3>
+
+                            <p>
+                                New features & testing
+                            </p>
+
+                        </div>
+
+                        <div class="check">
+                            ✓
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+            <!-- SETTINGS -->
+
+            <section
+                class="page"
+                id="settings"
+                style="display:none"
+            >
+
+                <header class="header">
+
+                    <div>
+
+                        <div class="eyebrow">
+                            FLaway / SETTINGS
+                        </div>
+
+                        <h1 class="title">
+                            Settings
+                        </h1>
+
+                        <p class="subtitle">
+                            Customize your interface.
+                        </p>
+
+                    </div>
+
+                </header>
+
+                <div class="settings-grid">
+
+                    <div class="setting-card">
+
+                        <h3>
+                            Accent theme
+                        </h3>
+
+                        <p>
+                            Change the primary interface color.
+                        </p>
+
+                        <div class="themes">
+
+                            <div
+                                class="theme active"
+                                data-accent="#a875ff"
+                                data-accent2="#6b35ff"
+                                data-rgb="168,117,255"
+                                style="
+                                    background:#a875ff;
+                                    --theme:#a875ff
+                                "
+                            ></div>
+
+                            <div
+                                class="theme"
+                                data-accent="#5b9cff"
+                                data-accent2="#2865ff"
+                                data-rgb="91,156,255"
+                                style="
+                                    background:#5b9cff;
+                                    --theme:#5b9cff
+                                "
+                            ></div>
+
+                            <div
+                                class="theme"
+                                data-accent="#ff65bd"
+                                data-accent2="#ff2f91"
+                                data-rgb="255,101,189"
+                                style="
+                                    background:#ff65bd;
+                                    --theme:#ff65bd
+                                "
+                            ></div>
+
+                            <div
+                                class="theme"
+                                data-accent="#63e89b"
+                                data-accent2="#25ad68"
+                                data-rgb="99,232,155"
+                                style="
+                                    background:#63e89b;
+                                    --theme:#63e89b
+                                "
+                            ></div>
+
+                            <div
+                                class="theme"
+                                data-accent="#ffae5b"
+                                data-accent2="#ff7428"
+                                data-rgb="255,174,91"
+                                style="
+                                    background:#ffae5b;
+                                    --theme:#ffae5b
+                                "
+                            ></div>
+
+                        </div>
+
+                    </div>
+
+                    <div class="setting-card">
+
+                        <h3>
+                            Interface
+                        </h3>
+
+                        <p>
+                            Liquid Glass visual effects.
+                        </p>
+
+                        <div class="toggle-row">
+
+                            <span>
+                                Liquid Glass
+                            </span>
+
+                            <div class="toggle on">
+                                <span></span>
+                            </div>
+
+                        </div>
+
+                        <div class="toggle-row">
+
+                            <span>
+                                Parallax
+                            </span>
+
+                            <div class="toggle on">
+                                <span></span>
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </section>
+
+        </main>
+
+    </div>
+
+</div>
+
+<!-- RESTORE -->
+
+<button
+    class="restore-window"
+    id="restore"
+>
+    F
+</button>
+
+<!-- TOAST -->
+
+<div
+    class="toast"
+    id="toast"
+>
+
+    <div class="toast-title">
+        Success
+    </div>
+
+    <div
+        class="toast-text"
+        id="toastText"
+    >
+        Operation completed.
+    </div>
+
+</div>
+
+<!-- INJECT -->
+
+<div
+    class="inject-overlay"
+    id="injectOverlay"
+>
+
+    <div class="inject-box">
+
+        <div class="inject-spinner"></div>
+
+        <h2>
+            Injecting DLC
+        </h2>
+
+        <p id="injectText">
+            initializing...
+        </p>
+
+    </div>
+
+</div>
+
+<script>
+
+/* =========================================================
+   ELEMENTS
+========================================================= */
+
+const root =
+    document.documentElement;
+
+const app =
+    document.getElementById("app");
+
+const boot =
+    document.getElementById("boot");
+
+const restore =
+    document.getElementById("restore");
+
+const toast =
+    document.getElementById("toast");
+
+const toastText =
+    document.getElementById("toastText");
+
+const injectOverlay =
+    document.getElementById("injectOverlay");
+
+const injectText =
+    document.getElementById("injectText");
+
+let selectedVersion = "DLC";
+let parallaxEnabled = true;
+let animationFrame = null;
+
+
+/* =========================================================
+   OPTIMIZED PARALLAX
+   requestAnimationFrame вместо постоянного
+   изменения CSS на каждый mousemove.
+========================================================= */
+
+let mouseX = 50;
+let mouseY = 50;
+
+let currentX = 50;
+let currentY = 50;
+
+document.addEventListener(
+    "mousemove",
+    event => {
+
+        mouseX =
+            event.clientX /
+            window.innerWidth *
+            100;
+
+        mouseY =
+            event.clientY /
+            window.innerHeight *
+            100;
+
+        if (!animationFrame) {
+            animationFrame =
+                requestAnimationFrame(updateParallax);
+        }
+
+    },
+    {
+        passive: true
+    }
+);
+
+function updateParallax() {
+
+    animationFrame = null;
+
+    if (!parallaxEnabled)
+        return;
+
+    currentX +=
+        (mouseX - currentX) * .08;
+
+    currentY +=
+        (mouseY - currentY) * .08;
+
+    root.style.setProperty(
+        "--mx",
+        currentX + "%"
+    );
+
+    root.style.setProperty(
+        "--my",
+        currentY + "%"
+    );
+
+    if (
+        Math.abs(mouseX - currentX) > .05 ||
+        Math.abs(mouseY - currentY) > .05
+    ) {
+        animationFrame =
+            requestAnimationFrame(updateParallax);
+    }
+}
+
+
+/* =========================================================
+   TAB SYSTEM
+========================================================= */
+
+const navButtons =
+    document.querySelectorAll(".nav button");
+
+const pages =
+    document.querySelectorAll(".page");
+
+navButtons.forEach(button => {
+
+    button.addEventListener("click", () => {
+
+        const pageName =
+            button.dataset.page;
+
+        navButtons.forEach(item => {
+            item.classList.remove("active");
+        });
+
+        button.classList.add("active");
+
+        pages.forEach(page => {
+
+            if (page.id === pageName) {
+
+                page.style.display =
+                    "block";
+
+                page.classList.remove(
+                    "page"
+                );
+
+                void page.offsetWidth;
+
+                page.classList.add(
+                    "page"
+                );
+
+            } else {
+
+                page.style.display =
+                    "none";
+
+            }
+
+        });
+
+    });
+
+});
+
+
+/* =========================================================
+   VERSION SELECT
+========================================================= */
+
+document
+.querySelectorAll(".version")
+.forEach(card => {
+
+    card.addEventListener("click", () => {
+
+        const parent =
+            card.parentElement;
+
+        parent
+        .querySelectorAll(".version")
+        .forEach(item => {
+            item.classList.remove(
+                "selected"
+            );
+        });
+
+        card.classList.add(
+            "selected"
+        );
+
+        selectedVersion =
+            card.dataset.version;
+
+        const text =
+            document.getElementById(
+                "selectedText"
+            );
+
+        if (text) {
+
+            text.classList.remove(
+                "text-swap"
+            );
+
+            void text.offsetWidth;
+
+            text.textContent =
+                selectedVersion +
+                " selected";
+
+            text.classList.add(
+                "text-swap"
+            );
+
+        }
+
+    });
+
+});
+
+
+/* =========================================================
+   THEME SYSTEM
+========================================================= */
+
+document
+.querySelectorAll(".theme")
+.forEach(theme => {
+
+    theme.addEventListener(
+        "click",
+        () => {
+
+            document
+            .querySelectorAll(".theme")
+            .forEach(item => {
+                item.classList.remove(
+                    "active"
+                );
+            });
+
+            theme.classList.add(
+                "active"
+            );
+
+            const accent =
+                theme.dataset.accent;
+
+            const accent2 =
+                theme.dataset.accent2;
+
+            const rgb =
+                theme.dataset.rgb;
+
+            root.style.setProperty(
+                "--accent",
+                accent
+            );
+
+            root.style.setProperty(
+                "--accent2",
+                accent2
+            );
+
+            root.style.setProperty(
+                "--rgb",
+                rgb
+            );
+
+        }
+    );
+
+});
+
+
+/* =========================================================
+   TOGGLES
+========================================================= */
+
+document
+.querySelectorAll(".toggle")
+.forEach(toggle => {
+
+    toggle.addEventListener(
+        "click",
+        () => {
+
+            toggle.classList.toggle(
+                "on"
+            );
+
+            const rows =
+                toggle.parentElement;
+
+            if (
+                rows.textContent
+                .toLowerCase()
+                .includes("parallax")
+            ) {
+
+                parallaxEnabled =
+                    toggle.classList.contains(
+                        "on"
+                    );
+
+                if (!parallaxEnabled) {
+
+                    root.style.setProperty(
+                        "--mx",
+                        "50%"
+                    );
+
+                    root.style.setProperty(
+                        "--my",
+                        "50%"
+                    );
+
+                }
+
+            }
+
+        }
+    );
+
+});
+
+
+/* =========================================================
+   TOAST
+========================================================= */
+
+let toastTimer;
+
+function showToast(
+    title,
+    message
+) {
+
+    toast
+    .querySelector(".toast-title")
+    .textContent =
+        title;
+
+    toastText.textContent =
+        message;
+
+    toast.classList.add(
+        "show"
+    );
+
+    clearTimeout(
+        toastTimer
+    );
+
+    toastTimer =
+        setTimeout(() => {
+
+            toast.classList.remove(
+                "show"
+            );
+
+        }, 3000);
+}
+
+
+/* =========================================================
+   DOWNLOAD
+========================================================= */
+
+document
+.getElementById("download")
+.addEventListener(
+    "click",
+    () => {
+
+        showToast(
+            "Download",
+            "Latest flaway build is ready."
+        );
+
+    }
+);
+
+
+/* =========================================================
+   INJECT
+========================================================= */
+
+const injectButton =
+    document.getElementById(
+        "inject"
+    );
+
+const messages = [
+    "initializing...",
+    "loading modules...",
+    "checking subscription...",
+    "preparing environment...",
+    "loading flaway core...",
+    "injecting...",
+    "almost done..."
+];
+
+injectButton.addEventListener(
+    "click",
+    () => {
+
+        injectOverlay.classList.add(
+            "active"
+        );
+
+        let index = 0;
+
+        injectText.textContent =
+            messages[0];
+
+        injectText.classList.add(
+            "inject-text-change"
+        );
+
+        const interval =
+            setInterval(() => {
+
+                index++;
+
+                if (
+                    index >=
+                    messages.length
+                ) {
+
+                    clearInterval(
+                        interval
+                    );
+
+                    changeInjectText(
+                        "completed successfully."
+                    );
+
+                    setTimeout(() => {
+
+                        injectOverlay
+                        .classList.remove(
+                            "active"
+                        );
+
+                        showToast(
+                            "Injection complete",
+                            selectedVersion +
+                            " is ready."
+                        );
+
+                    }, 900);
+
+                    return;
+                }
+
+                changeInjectText(
+                    messages[index]
+                );
+
+            }, 700);
+
+    }
+);
+
+function changeInjectText(text) {
+
+    injectText.classList.remove(
+        "inject-text-change"
+    );
+
+    void injectText.offsetWidth;
+
+    injectText.textContent =
+        text;
+
+    injectText.classList.add(
+        "inject-text-change"
+    );
+}
+
+
+/* =========================================================
+   MINIMIZE
+========================================================= */
+
+document
+.getElementById("minimize")
+.addEventListener(
+    "click",
+    () => {
+
+        app.classList.add(
+            "hidden-window"
+        );
+
+        restore.classList.add(
+            "visible"
+        );
+
+    }
+);
+
+
+/* =========================================================
+   RESTORE
+========================================================= */
+
+restore.addEventListener(
+    "click",
+    () => {
+
+        app.classList.remove(
+            "hidden-window"
+        );
+
+        restore.classList.remove(
+            "visible"
+        );
+
+    }
+);
+
+
+/* =========================================================
+   CLOSE
+========================================================= */
+
+document
+.getElementById("close")
+.addEventListener(
+    "click",
+    () => {
+
+        app.style.transition =
+            "opacity .35s ease, transform .35s ease";
+
+        app.style.opacity =
+            "0";
+
+        app.style.transform =
+            "scale(.96)";
+
+        setTimeout(() => {
+
+            document.body.innerHTML = `
+                <div style="
+                    position:fixed;
+                    inset:0;
+                    display:grid;
+                    place-items:center;
+                    background:#060609;
+                    color:#666671;
+                    font-family:Monocraft,monospace;
+                    font-size:10px;
+                ">
+                    flaway closed
+                </div>
+            `;
+
+        }, 350);
+
+    }
+);
+
+
+/* =========================================================
+   BOOT
+========================================================= */
+
+setTimeout(() => {
+
+    boot.classList.add(
+        "hidden"
+    );
+
+}, 1800);
+
+
+/* =========================================================
+   KEYBOARD
+========================================================= */
+
+document.addEventListener(
+    "keydown",
+    event => {
+
+        if (
+            event.key === "Escape"
+        ) {
+
+            if (
+                injectOverlay
+                .classList.contains(
+                    "active"
+                )
+            ) {
+
+                injectOverlay
+                .classList.remove(
+                    "active"
+                );
+
+            }
+
+        }
+
+    }
+);
+
+</script>
+
+</body>
+</html>
+
+
+

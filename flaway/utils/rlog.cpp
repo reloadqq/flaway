@@ -226,7 +226,7 @@ bool gl_state_snapshot(char* out, size_t outsz) {
 	geti(0x8894 /*GL_ARRAY_BUFFER_BINDING*/, &abuf);
 	geti(0x8895 /*GL_ELEMENT_ARRAY_BUFFER_BINDING*/, &ebuf);
 	geti(0x806A /*GL_TEXTURE_BINDING_2D*/, &tex);
-	geti(0x84C0 /*GL_ACTIVE_TEXTURE*/, &act);
+	geti(0x84E0 /*GL_ACTIVE_TEXTURE*/, &act);
 	geti(0x8CA6 /*GL_DRAW_FRAMEBUFFER_BINDING*/, &fbo);
 	geti(0x8CAA /*GL_READ_FRAMEBUFFER_BINDING*/, &rfbo);
 	geti(0x80C9 /*GL_BLEND_SRC_RGB*/, &blend_src);

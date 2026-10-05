@@ -13,8 +13,9 @@
 // How it works: the HUD queues one request per card during the ImGui build
 // pass; each request becomes an ImDrawList user callback. The callback runs
 // inside ImGui_ImplOpenGL3_RenderDrawData, so it only has to set up its own
-// program/scissor and draw one quad — the immediately following
-// ImDrawCallback_ResetRenderState hands full control back to the backend.
+// program/scissor and draw one quad — it puts the backend's program/VAO back
+// itself, which is why no ImDrawCallback_ResetRenderState is needed after it
+// (that callback used to re-run the whole state setup once per card).
 // ---------------------------------------------------------------------------
 namespace hud_fx {
 namespace {
@@ -249,6 +250,11 @@ int u_proj = -1, u_rect = -1, u_radius = -1, u_time = -1, u_alpha = -1, u_phase 
 unsigned s_vao = 0, s_vbo = 0;
 bool s_tried = false;
 bool s_ok = false;
+// Program/VAO/VBO the backend had bound when the pass started. They do not
+// change between our callbacks, so they are read once per frame instead of
+// per card (3 glGetIntegerv x every plate x every frame was pure waste).
+int s_saved_prog = 0, s_saved_vao = 0, s_saved_vbo = 0;
+bool s_state_cached = false;
 
 unsigned compile(unsigned type, const char* src) {
     unsigned s = pCreateShader(type);
@@ -270,6 +276,15 @@ unsigned compile(unsigned type, const char* src) {
 const float k_quad[8] = { 0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
 
 bool create_pipeline() {
+    // Setup runs during the ImGui *build* pass, i.e. outside ImGui's own
+    // GL-state backup inside RenderDrawData, so anything we touch here leaks
+    // straight into the game's context. Minecraft/Sodium caches its VAO and
+    // GL_ARRAY_BUFFER bindings: leaving them at 0 makes the next world draw
+    // run with VAO 0 (illegal in a core profile) -> the whole scene renders
+    // black. Save both and put them back exactly as found.
+    int last_vao = 0, last_vbo = 0;
+    pGetIntegerv(0x85B5, &last_vao);            // GL_VERTEX_ARRAY_BINDING
+    pGetIntegerv(GL_ARRAY_BUFFER_BINDING_, &last_vbo);
     unsigned vs = compile(GL_VERTEX_SHADER_, k_vs);
     unsigned fs = compile(GL_FRAGMENT_SHADER_, k_fs);
     if (!vs || !fs) {
@@ -310,7 +325,8 @@ bool create_pipeline() {
     pBufferData(GL_ARRAY_BUFFER_, sizeof(k_quad), k_quad, GL_STATIC_DRAW_);
     pEnableVertexAttribArray(0);
     pVertexAttribPointer(0, 2, GL_FLOAT_, 0, 2 * sizeof(float), (const void*)0);
-    pBindVertexArray(0);
+    pBindVertexArray((unsigned)last_vao);
+    pBindBuffer(GL_ARRAY_BUFFER_, (unsigned)last_vbo);
     return s_vao != 0 && s_vbo != 0;
 }
 
@@ -323,10 +339,12 @@ struct Req {
 };
 
 // 64 was not enough once several effects can be queued per element (array list
-// alone can be 24 rows on top of watermark/coords chips).
-constexpr int k_max_req = 128;
+// alone can be 24 rows on top of watermark/coords chips). 256 also covers the
+// ESP (one sweep per name/item plate on top of the HUD).
+constexpr int k_max_req = 256;
 Req s_reqs[k_max_req];
 int s_req_n = 0;
+int s_req_frame = -999999;
 
 void fx_callback(const ImDrawList*, const ImDrawCmd* cmd) {
     int idx = (int)(intptr_t)cmd->UserCallbackData - 1;
@@ -373,18 +391,15 @@ void fx_callback(const ImDrawList*, const ImDrawCmd* cmd) {
         (R + L) / (L - R), (T + B) / (B - T), 0.0f, 1.0f,
     };
 
-    // Save the bits of GL state we are about to touch: the backend re-binds
-    // its own program/VAO after us (ImDrawCallback_ResetRenderState), but the
-    // scissor box is ours to put back so later commands start clean.
-    int saved_prog = 0, saved_vao = 0, saved_vbo = 0, saved_scissor[4] = {0, 0, 0, 0};
-    int saved_scissor_on = 0;
-    pGetIntegerv(0x8B8D, &saved_prog);   // GL_CURRENT_PROGRAM
-    pGetIntegerv(0x85B5, &saved_vao);    // GL_VERTEX_ARRAY_BINDING
-    pGetIntegerv(GL_ARRAY_BUFFER_BINDING_, &saved_vbo); // GL_ARRAY_BUFFER_BINDING
-    pGetIntegerv(0x0C10, saved_scissor); // GL_SCISSOR_BOX
-    // GL_SCISSOR_TEST is an enable cap: it is only queryable through
-    // glIsEnabled(). glGetIntegerv(0x0C11) would raise GL_INVALID_ENUM.
-    saved_scissor_on = pIsEnabled(0x0C11) ? 1 : 0;
+    // The backend re-issues glScissor for every command it draws and restores
+    // the game's box/enable at the end of the pass, so the clip state needs no
+    // save/restore here — only the program/VAO/VBO we are about to rebind do.
+    if (!s_state_cached) {
+        pGetIntegerv(0x8B8D, &s_saved_prog);   // GL_CURRENT_PROGRAM
+        pGetIntegerv(0x85B5, &s_saved_vao);    // GL_VERTEX_ARRAY_BINDING
+        pGetIntegerv(GL_ARRAY_BUFFER_BINDING_, &s_saved_vbo);
+        s_state_cached = true;
+    }
 
     pEnable(GL_SCISSOR_TEST_);
     pScissor(sc_x, sc_y, sc_w, sc_h);
@@ -400,11 +415,12 @@ void fx_callback(const ImDrawList*, const ImDrawCmd* cmd) {
     pUniform3f(u_accent, r.ar, r.ag, r.ab);
     pBindVertexArray(s_vao);
     pDrawArrays(GL_TRIANGLE_STRIP_, 0, 4);
-    pBindVertexArray((unsigned)saved_vao);
-    pBindBuffer(GL_ARRAY_BUFFER_, (unsigned)saved_vbo);
-    pUseProgram((unsigned)saved_prog);
-    pScissor(saved_scissor[0], saved_scissor[1], saved_scissor[2], saved_scissor[3]);
-    if (!saved_scissor_on) pDisable(GL_SCISSOR_TEST_);
+    // Hand the renderer back exactly as we found it; the backend continues with
+    // the next command on its own program/VAO, so no ResetRenderState callback
+    // is needed (that callback re-ran the full ~15-call state setup per card).
+    pBindVertexArray((unsigned)s_saved_vao);
+    pBindBuffer(GL_ARRAY_BUFFER_, (unsigned)s_saved_vbo);
+    pUseProgram((unsigned)s_saved_prog);
 }
 
 bool ensure() {
@@ -421,10 +437,20 @@ bool ensure() {
 
 } // namespace
 
-void begin_frame() { s_req_n = 0; }
+void begin_frame() {
+    // Frame-guarded: the queue may be filled by several modules in one frame
+    // (ESP first, HUD/menu later) — only the first call of a frame resets it,
+    // so every request queued this frame stays valid until RenderDrawData.
+    int frame = ImGui::GetCurrentContext() ? ImGui::GetFrameCount() : -1;
+    if (frame == s_req_frame) return;
+    s_req_frame = frame;
+    s_req_n = 0;
+    s_state_cached = false; // the backend rebinds its program/VAO each frame
+}
 
 void fx(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding,
         float alpha, float phase, int mode) {
+    begin_frame();  // drop leftovers from the previous frame before queueing
     if (!dl || alpha <= 0.002f) return;
     if (p1.x - p0.x < 2.0f || p1.y - p0.y < 2.0f) return;
     if (!ensure()) return;
@@ -446,8 +472,9 @@ void fx(ImDrawList* dl, const ImVec2& p0, const ImVec2& p1, float rounding,
     r.ab = (float)((ac >> 16) & 255) / 255.0f;
 
     dl->AddCallback(fx_callback, (void*)(intptr_t)(s_req_n + 1));
-    // Hand the renderer back to the ImGui backend untouched.
-    dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+    // No ImDrawCallback_ResetRenderState after it: the callback restores the
+    // program/VAO/VBO itself and the backend re-issues glScissor per command,
+    // so re-running the full state setup per card was only burning frames.
     s_req_n++;
 }
 
@@ -466,6 +493,8 @@ void shutdown() {
     s_tried = false;
     s_ok = false;
     s_req_n = 0;
+    s_req_frame = -999999;
+    s_state_cached = false;
 }
 
 } // namespace hud_fx

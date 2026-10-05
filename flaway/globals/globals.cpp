@@ -119,6 +119,7 @@ namespace globals
     bool mobstats_enabled = false;
     bool esp_tracers = false;
     float esp_tracer_color[4] = {1.0f, 1.0f, 1.0f, 0.5f};
+    bool esp_arrows = true;
     bool server_rotation_enabled = false;
     bool storage_esp_enabled = false;
     bool storage_esp_chest = false;
@@ -191,4 +192,13 @@ namespace globals
     int theme_id = 0;
     bool gui_background_gradient = true;
     int gui_gradient_style = 1;
+    int theme_accent = 0;
+    int theme_grad = -1;
+    bool theme_dark = true;
+
+    bool discord_rpc_enabled = true;
+    char discord_rpc_client_id[24] = "1556271882276175983";
+    char discord_rpc_state[64] = "Hwid: dev";
+    char discord_rpc_details[64] = "in menu";
+    char discord_rpc_large_image[32] = "";
 }

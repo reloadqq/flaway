@@ -29,6 +29,7 @@ namespace
 		K_FLOAT,
 		K_DOUBLE,
 		K_FLOAT4,
+		K_STR,   // NUL terminated char buffer, size = capacity
 	};
 
 	struct entry
@@ -36,6 +37,7 @@ namespace
 		const char* key;
 		EKind kind;
 		void* ptr;
+		int size = 0;
 	};
 
 	// One entry per persisted global. Runtime-only state (timers, saved slots,
@@ -45,6 +47,7 @@ namespace
 #define EFLT(k, v)  { (k), EKind::K_FLOAT,(void*)&(v) }
 #define EDBL(k, v)  { (k), EKind::K_DOUBLE,(void*)&(v) }
 #define EF4(k, v)   { (k), EKind::K_FLOAT4,(void*)&(v) }
+#define ESTR(k, v)  { (k), EKind::K_STR,  (void*)&(v), (int)sizeof(v) }
 
 	const entry k_entries[] = {
 		// Aim Assist
@@ -161,6 +164,7 @@ namespace
 		EFLT("esp.vertical_offset", globals::esp_vertical_offset),
 		EBOOL("esp.tracers", globals::esp_tracers),
 		EF4("esp.tracer_color", globals::esp_tracer_color),
+		EBOOL("esp.arrows", globals::esp_arrows),
 		// Server Rotation
 		EBOOL("server_rotation.enabled", globals::server_rotation_enabled),
 		// Storage ESP
@@ -240,6 +244,15 @@ namespace
 		EINT("gui.theme_id", globals::theme_id),
 		EBOOL("gui.background_gradient", globals::gui_background_gradient),
 		EINT("gui.gradient_style", globals::gui_gradient_style),
+		EINT("gui.accent", globals::theme_accent),
+		EINT("gui.gradient", globals::theme_grad),
+		EBOOL("gui.dark", globals::theme_dark),
+		// Discord Rich Presence
+		EBOOL("discord_rpc.enabled", globals::discord_rpc_enabled),
+		ESTR("discord_rpc.client_id", globals::discord_rpc_client_id),
+		ESTR("discord_rpc.state", globals::discord_rpc_state),
+		ESTR("discord_rpc.details", globals::discord_rpc_details),
+		ESTR("discord_rpc.large_image", globals::discord_rpc_large_image),
 	};
 
 	constexpr int k_entry_count = sizeof(k_entries) / sizeof(k_entries[0]);
@@ -296,6 +309,9 @@ namespace flaway
 						out << f[0] << "," << f[1] << "," << f[2] << "," << f[3];
 						break;
 					}
+					case EKind::K_STR:
+						out << (const char*)e.ptr;
+						break;
 				}
 				out << "\n";
 			}
@@ -342,6 +358,14 @@ namespace flaway
 							std::stringstream ss(val);
 							char comma;
 							ss >> f[0] >> comma >> f[1] >> comma >> f[2] >> comma >> f[3];
+							break;
+						}
+						case EKind::K_STR:
+						{
+							char* dst = (char*)e.ptr;
+							int cap = e.size > 0 ? e.size : 1;
+							strncpy(dst, val.c_str(), (size_t)cap - 1);
+							dst[cap - 1] = '\0';
 							break;
 						}
 					}

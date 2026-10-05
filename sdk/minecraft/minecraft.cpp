@@ -574,3 +574,66 @@ bool sdk::minecraft_client::do_attack()
 	}
 
 
+
+	std::string sdk::minecraft_client::get_current_server()
+	{
+		auto env = flaway::instance->get_env();
+		if (!env) return std::string();
+
+		jclass minecraft_class = klass();
+		jobject minecraft = get_minecraft();
+		if (!minecraft_class || !minecraft)
+		{
+			if (minecraft_class) env->DeleteLocalRef(minecraft_class);
+			if (minecraft) env->DeleteLocalRef(minecraft);
+			return std::string();
+		}
+
+		// MinecraftClient.getCurrentServerEntry() -> ServerInfo, null in
+		// singleplayer and on the main menu.
+		static jmethodID mid = nullptr;
+		if (!mid)
+		{
+			mid = env->GetMethodID(minecraft_class, sdk::mappings::current_server_entry_name,
+			                       sdk::mappings::current_server_entry_sig);
+			check_jni_exception(env, "GetMethodID getCurrentServerEntry");
+		}
+
+		std::string out;
+		if (mid)
+		{
+			jobject info = env->CallObjectMethod(minecraft, mid);
+			check_jni_exception(env, "CallObjectMethod getCurrentServerEntry");
+			if (info)
+			{
+				jclass info_class = env->GetObjectClass(info);
+				if (info_class)
+				{
+					jfieldID fid = env->GetFieldID(info_class, sdk::mappings::server_info_address_name,
+					                               sdk::mappings::server_info_address_sig);
+					check_jni_exception(env, "GetFieldID ServerInfo.address");
+					if (fid)
+					{
+						jstring addr = (jstring)env->GetObjectField(info, fid);
+						check_jni_exception(env, "GetObjectField ServerInfo.address");
+						if (addr)
+						{
+							const char* utf = env->GetStringUTFChars(addr, nullptr);
+							if (utf)
+							{
+								out.assign(utf);
+								env->ReleaseStringUTFChars(addr, utf);
+							}
+							env->DeleteLocalRef(addr);
+						}
+					}
+					env->DeleteLocalRef(info_class);
+				}
+				env->DeleteLocalRef(info);
+			}
+		}
+
+		env->DeleteLocalRef(minecraft_class);
+		env->DeleteLocalRef(minecraft);
+		return out;
+	}

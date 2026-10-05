@@ -159,6 +159,7 @@ namespace globals
     extern bool mobstats_enabled;
     extern bool esp_tracers;
     extern float esp_tracer_color[4];
+    extern bool esp_arrows;
 
     // Server Rotation
     extern bool server_rotation_enabled;
@@ -246,4 +247,22 @@ namespace globals
     extern int theme_id;
     extern bool gui_background_gradient;
     extern int gui_gradient_style;
+    // Accent swatch index (0..5) and gradient preset index (-1 = derive the
+    // gradient from the accent, 0..3 = Ocean/Sunset/Fire/Forest).
+    extern int theme_accent;
+    extern int theme_grad;
+    // Light/dark appearance (persisted; applied on the render path).
+    extern bool theme_dark;
+
+    // Discord Rich Presence (flaway/utils/discord_rpc.cpp)
+    extern bool discord_rpc_enabled;
+    // Application (client) ID from https://discord.com/developers/applications
+    extern char discord_rpc_client_id[24];
+    // Second status line (the first one is the joined server address).
+    extern char discord_rpc_state[64];
+    // First line fallback while NOT on a server (config only, no GUI field).
+    extern char discord_rpc_details[64];
+    // Optional asset key uploaded in the Discord app, empty = no image
+    // (config only, no GUI field).
+    extern char discord_rpc_large_image[32];
 }

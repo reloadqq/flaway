@@ -1,5 +1,6 @@
 #include "Hook.h"
 #include "../flaway.h"
+#include <sdk/minecraft/minecraft.h>
 #include "../gui/GUI.h"
 #include "../globals/globals.h"
 #include "../utils/logger.h"
@@ -20,6 +21,7 @@
 #include "../gui/glass_blur.h"
 #include "flaway/utils/no_log.h"
 #include "flaway/utils/rlog.h"
+#include "flaway/utils/discord_rpc.h"
 #include <link.h>
 
 static int s_hook_diag_fd = -1;
@@ -265,6 +267,34 @@ namespace linux_hook {
 		// After unhook the .so must not touch JNI/ImGui anymore. Just fall
 		// through to the original swap so the game keeps rendering.
 		if (get_unhooked()) return false;
+
+		// Discord Rich Presence: starts on inject (init() path), and here we
+		// only react to GUI changes (enable/disable/edited settings).
+		discord_rpc::tick();
+
+		// First status line follows the game: the joined server address, or
+		// "in menu" when no server is joined. Once a second is enough, the
+		// worker only re-sends the activity when the text really changed.
+		if (globals::discord_rpc_enabled)
+		{
+			static long long s_rpc_details_us = 0;
+			long long now_us = (long long)std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			if (s_rpc_details_us == 0 || now_us - s_rpc_details_us >= 1000000)
+			{
+				s_rpc_details_us = now_us;
+				// No JNIEnv yet: keep the previous text instead of flashing
+				// a wrong "in menu" while the game is still joining.
+				if (flaway::instance && flaway::instance->get_env() && sdk::instance)
+				{
+					// The address of the server the player is on right now,
+					// else the config key (default "in menu").
+					std::string server = sdk::instance->get_current_server();
+					discord_rpc::set_details(server.empty() ? globals::discord_rpc_details
+					                                        : server.c_str());
+				}
+			}
+		}
 
 		bool toggle = x11_helper::check_toggle();
 

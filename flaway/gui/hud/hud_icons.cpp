@@ -31,6 +31,7 @@ typedef void (*PFN_TEXIMAGE)(unsigned, int, int, int, int, int, unsigned, unsign
 typedef void (*PFN_DELTEX)(int, const unsigned*);
 typedef void (*PFN_PIXELSTORE)(unsigned, int);
 typedef void (*PFN_GETINTEGERV)(unsigned, int*);
+typedef void (*PFN_BINDBUFFER)(unsigned, unsigned);
 
 PFN_GENTEX pGenTextures = nullptr;
 PFN_BINDTEX pBindTexture = nullptr;
@@ -39,6 +40,9 @@ PFN_TEXIMAGE pTexImage2D = nullptr;
 PFN_DELTEX pDeleteTextures = nullptr;
 PFN_PIXELSTORE pPixelStorei = nullptr;
 PFN_GETINTEGERV pGetIntegerv = nullptr;
+// Optional: only needed to unbind a stale pixel-unpack buffer (see
+// upload_rgba). Missing symbols must never fail the loader.
+PFN_BINDBUFFER pBindBuffer = nullptr;
 
 bool gl_loaded = false;
 bool gl_ok = false;
@@ -53,6 +57,7 @@ bool load_gl() {
     pDeleteTextures = (PFN_DELTEX)dlsym(RTLD_DEFAULT, "glDeleteTextures");
     pPixelStorei = (PFN_PIXELSTORE)dlsym(RTLD_DEFAULT, "glPixelStorei");
     pGetIntegerv = (PFN_GETINTEGERV)dlsym(RTLD_DEFAULT, "glGetIntegerv");
+    pBindBuffer = (PFN_BINDBUFFER)dlsym(RTLD_DEFAULT, "glBindBuffer"); // optional
     gl_ok = pGenTextures && pBindTexture && pTexParameteri && pTexImage2D &&
             pDeleteTextures && pPixelStorei && pGetIntegerv;
     if (!gl_ok) rlog::logf("hud_icons: failed to resolve GL texture functions");
@@ -76,6 +81,8 @@ constexpr unsigned kUnpackSkipRows = 0x0CF3;
 constexpr unsigned kUnpackSkipPixels = 0x0CF4;
 constexpr unsigned kTexture2D = 0x0DE1;
 constexpr unsigned kTextureBinding2D = 0x806A;
+constexpr unsigned kPixelUnpackBuffer = 0x88EB;      // GL_PIXEL_UNPACK_BUFFER
+constexpr unsigned kUnpackBufferBinding = 0x88EC;    // ..._BINDING
 
 unsigned upload_rgba(const unsigned char* pixels, int w, int h) {
     if (!pixels || w <= 0 || h <= 0 || !load_gl()) return 0;
@@ -84,12 +91,13 @@ unsigned upload_rgba(const unsigned char* pixels, int w, int h) {
     // they shift the source pointer and the icon comes out as scrambled rows —
     // zero them for our upload and put every value back exactly as found.
     // Same for the pixel-store alignment and the binding of the active unit.
-    int saved[5] = {0, 0, 0, 4, 0};
+    int saved[6] = {0, 0, 0, 4, 0, 0};
     pGetIntegerv(kUnpackRowLength, &saved[0]);
     pGetIntegerv(kUnpackSkipPixels, &saved[1]);
     pGetIntegerv(kUnpackSkipRows, &saved[2]);
     pGetIntegerv(kUnpackAlignment, &saved[3]);
     pGetIntegerv(kTextureBinding2D, &saved[4]);
+    pGetIntegerv(kUnpackBufferBinding, &saved[5]);
     unsigned tex = 0;
     pGenTextures(1, &tex);
     if (!tex) return 0;
@@ -104,7 +112,11 @@ unsigned upload_rgba(const unsigned char* pixels, int w, int h) {
     pTexParameteri(kTexture2D, kMagFilter, (int)kNearest);
     pTexParameteri(kTexture2D, kWrapS, (int)kClampToEdge);
     pTexParameteri(kTexture2D, kWrapT, (int)kClampToEdge);
+    // A pixel-unpack buffer left bound by the game would make glTexImage2D
+    // read from offset 0 of that PBO instead of our pixels (garbage texture).
+    if (saved[5] && pBindBuffer) pBindBuffer(kPixelUnpackBuffer, 0);
     pTexImage2D(kTexture2D, 0, (int)kRGBA, w, h, 0, kRGBA, kUnsignedByte, pixels);
+    if (saved[5] && pBindBuffer) pBindBuffer(kPixelUnpackBuffer, (unsigned)saved[5]);
     pPixelStorei(kUnpackRowLength, saved[0]);
     pPixelStorei(kUnpackSkipPixels, saved[1]);
     pPixelStorei(kUnpackSkipRows, saved[2]);
@@ -257,6 +269,7 @@ bool zip_read(const std::string& jar, const ZipEntry& e, std::vector<unsigned ch
 // caches --------------------------------------------------------------------
 std::map<std::string, unsigned> g_item_tex;    // suffix -> GL tex (0 = no texture)
 std::map<std::string, unsigned> g_skin_tex;    // hash -> GL tex (0 = failed)
+std::map<const void*, unsigned> g_mem_tex;     // embedded PNG -> GL tex
 std::vector<unsigned> g_all_tex;
 
 unsigned cache_add(unsigned tex) {
@@ -330,12 +343,24 @@ unsigned skin(const std::string& hash) {
     return cached;
 }
 
+// Embedded PNG (compiled-in byte array): decoded once, cached by pointer so a
+// caller can pass a static array every frame without re-uploading.
+unsigned png(const unsigned char* data, size_t len) {
+    if (!data || !len) return 0;
+    auto it = g_mem_tex.find(data);
+    if (it != g_mem_tex.end()) return it->second;
+    unsigned tex = cache_add(decode_png(data, len));
+    g_mem_tex[data] = tex;
+    return tex;
+}
+
 void shutdown() {
     if (pDeleteTextures && !g_all_tex.empty())
         pDeleteTextures((int)g_all_tex.size(), g_all_tex.data());
     g_all_tex.clear();
     g_item_tex.clear();
     g_skin_tex.clear();
+    g_mem_tex.clear();
 }
 
 } // namespace hud_icons

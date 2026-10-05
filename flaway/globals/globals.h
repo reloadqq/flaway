@@ -185,6 +185,22 @@ namespace globals
     extern float base_finder_cave_color[4];
     extern float base_finder_bypass_color[4];
 
+    // BaseFinder — поиск конкретных целей (сундуки, шалкеры, спавнеры,
+    // рамка/блок энд-портала, обсидиан, игроки) + трейсеры к ним и
+    // уведомления в чат/файл.
+    extern bool base_finder_targets;          // главный переключатель поиска целей
+    extern bool base_finder_target_chest;     // сундуки / сундуки с пряткой / бочки
+    extern bool base_finder_target_shulker;   // шалкер-боксы
+    extern bool base_finder_target_spawner;   // спавнеры
+    extern bool base_finder_target_frame;     // рамка энд-портала
+    extern bool base_finder_target_endportal; // блок энд-портала
+    extern bool base_finder_target_obsidian;  // обсидиан / плачущий обсидиан
+    extern bool base_finder_target_players;   // игроки
+    extern bool base_finder_tracers;          // трейсеры от низа экрана к целям
+    extern bool base_finder_log_chat;         // писать находки в локальный чат
+    extern bool base_finder_log_file;         // писать находки в ~/.minecraft/…
+    extern float base_finder_target_color[4];
+
     // Debug
     extern bool debug_logging_enabled;
 

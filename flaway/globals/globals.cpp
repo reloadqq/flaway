@@ -140,6 +140,20 @@ namespace globals
     float base_finder_cave_color[4] = {0.2f, 1.0f, 0.2f, 1.0f};
     float base_finder_bypass_color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 
+    // BaseFinder — target search (chests/shulkers/spawners/portal/obsidian/players)
+    bool base_finder_targets = true;
+    bool base_finder_target_chest = true;
+    bool base_finder_target_shulker = true;
+    bool base_finder_target_spawner = true;
+    bool base_finder_target_frame = true;
+    bool base_finder_target_endportal = true;
+    bool base_finder_target_obsidian = true;
+    bool base_finder_target_players = true;
+    bool base_finder_tracers = true;
+    bool base_finder_log_chat = true;
+    bool base_finder_log_file = true;
+    float base_finder_target_color[4] = {1.0f, 0.78f, 0.16f, 1.0f};
+
     bool debug_logging_enabled = false;
     bool flight_enabled = false;
     bool sprint_enabled = false;

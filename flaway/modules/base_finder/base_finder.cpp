@@ -4,15 +4,24 @@
 #include "../../gui/GUI.h"
 #include <sdk/minecraft/minecraft.h>
 #include <sdk/minecraft/entity/entity.h>
+#include <sdk/minecraft/world/world.h>
 #include <sdk/classloader.h>
 #include <sdk/mappings/mappings.hpp>
 #include <sdk/projection.h>
 #include "../../utils/logger.h"
+#include "../../utils/chat_notify.h"
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <ctime>
 #include <cfloat>
+#include <climits>
+#include <algorithm>
+#include <utility>
 #include <vector>
+#include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <mutex>
 #include <chrono>
 
@@ -94,6 +103,7 @@ namespace
 
 	base_finder_jni g_jni;
 	bool g_cached = false;
+	long long g_resolve_attempt_us = 0;
 
 	// ---- Shared output state (written by scan, read by draw/click) -----------
 	std::mutex g_mutex;
@@ -127,7 +137,7 @@ namespace
 	bypass_scanner_state g_bypass_scanner;
 	double g_last_px = 0.0, g_last_py = 0.0, g_last_pz = 0.0;
 	bool g_force_restart = false;
-	int g_frame_counter = 0;
+	long long g_frame_counter = 0;
 
 	long long now_us()
 	{
@@ -144,10 +154,554 @@ namespace
 		return false;
 	}
 
+	// Releases up to two JNI local refs on every exit path (early return and
+	// exception alike) so a throwing run() cannot leak references on the
+	// render thread.
+	struct ref_guard
+	{
+		JNIEnv* env;
+		jobject a;
+		jobject b;
+		ref_guard(JNIEnv* e, jobject x, jobject y) : env(e), a(x), b(y) {}
+		~ref_guard()
+		{
+			if (!env) return;
+			if (a) env->DeleteLocalRef(a);
+			if (b) env->DeleteLocalRef(b);
+		}
+		ref_guard(const ref_guard&) = delete;
+		ref_guard& operator=(const ref_guard&) = delete;
+	};
+
+	// ---- Target search (specific blocks + players) -------------------------
+	// Recognised block types. Keep target_name()/target_enabled() in sync.
+	enum target_type : int
+	{
+		T_CHEST = 0,      // chest / trapped chest / barrel
+		T_SHULKER,        // any shulker box
+		T_SPAWNER,        // monster spawner
+		T_FRAME,          // end portal frame
+		T_ENDPORTAL,      // end portal block
+		T_OBSIDIAN,       // obsidian / crying obsidian
+		T_PLAYER,         // live player (separate scan pass)
+		T_TYPE_COUNT
+	};
+
+	const char* target_name(int t)
+	{
+		switch (t)
+		{
+			case T_CHEST:      return "Chest";
+			case T_SHULKER:    return "Shulker";
+			case T_SPAWNER:    return "Spawner";
+			case T_FRAME:      return "EndPortalFrame";
+			case T_ENDPORTAL:  return "EndPortal";
+			case T_OBSIDIAN:   return "Obsidian";
+			case T_PLAYER:     return "Player";
+			default:           return "Unknown";
+		}
+	}
+
+	bool target_enabled(int t)
+	{
+		switch (t)
+		{
+			case T_CHEST:     return globals::base_finder_target_chest;
+			case T_SHULKER:   return globals::base_finder_target_shulker;
+			case T_SPAWNER:   return globals::base_finder_target_spawner;
+			case T_FRAME:     return globals::base_finder_target_frame;
+			case T_ENDPORTAL: return globals::base_finder_target_endportal;
+			case T_OBSIDIAN:  return globals::base_finder_target_obsidian;
+			case T_PLAYER:    return globals::base_finder_target_players;
+			default:          return false;
+		}
+	}
+
+	// Any block (non-player) filter switched on — lets us skip the whole
+	// block scan when the user only wants player tracers.
+	bool any_block_target_enabled()
+	{
+		return globals::base_finder_target_chest || globals::base_finder_target_shulker ||
+			globals::base_finder_target_spawner || globals::base_finder_target_frame ||
+			globals::base_finder_target_endportal || globals::base_finder_target_obsidian;
+	}
+
+	// Chunk-major walker: one chunk column is scanned in one go so
+	// isChunkLoaded() runs once per 16x16 column instead of once per block.
+	struct target_scanner_state
+	{
+		bool active = false;
+		bool finished = false;
+		scan_area area;
+		int min_cx = 0, max_cx = 0, min_cz = 0, max_cz = 0;
+		// Chunk columns in the order they should be visited (nearest first).
+		std::vector<std::pair<int, int>> chunks;
+		int chunk_i = 0;
+		int lx = 0, lz = 0, y = 0;
+		double org_x = 0.0, org_z = 0.0;   // player position when this pass started
+		long long finished_us = 0;
+		std::unordered_map<uint64_t, int> found;
+	};
+
+	target_scanner_state g_target_scanner;
+	long long g_last_partial_commit = 0;
+
+	// Shared output (written by the scan, read by draw / notify).
+	std::vector<base_finder_target> g_targets;
+	std::vector<base_finder_player> g_players;
+	// Positions already reported to chat/file this session, so a rescan of
+	// the same area never spams the report a second time.
+	std::unordered_set<uint64_t> g_reported;
+	std::unordered_set<int> g_reported_players;
+	// Chat lines waiting for the rate limiter (separate lock: flush_chat()
+	// calls into JNI, which must never happen while g_mutex is held).
+	std::mutex g_chat_mutex;
+	std::vector<std::string> g_pending_chat;
+	long long g_last_chat_us = 0;
+
+	// Identity caches. Blocks/BlockStates are singletons, so most probes hit
+	// these instead of paying for getBlock() + getTranslationKey() + a UTF-8
+	// round trip on every single block of the volume. A small ring (instead of
+	// one slot) keeps the handful of block types actually present in a chunk
+	// cached at once — one slot is useless on mixed terrain.
+	struct ident_cache
+	{
+		jobject obj[32];
+		int kind[32];
+		int n;
+		int next;
+	};
+	ident_cache g_state_cache = {};
+	ident_cache g_block_cache = {};
+
+	// Returns true on hit and stores the cached kind in *kind_out.
+	bool cache_lookup(JNIEnv* env, ident_cache& c, jobject o, int* kind_out)
+	{
+		if (!o) return false;
+		for (int i = 0; i < c.n; i++)
+		{
+			if (c.obj[i] && env->IsSameObject(o, c.obj[i]))
+			{
+				*kind_out = c.kind[i];
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void cache_store(JNIEnv* env, ident_cache& c, jobject o, int kind)
+	{
+		if (!o) return;
+		jobject g = env->NewGlobalRef(o);
+		if (!g) return;
+		int i = c.next;
+		if (c.obj[i]) env->DeleteGlobalRef(c.obj[i]);
+		c.obj[i] = g;
+		c.kind[i] = kind;
+		c.next = (i + 1) % 32;
+		if (c.n < 32) c.n++;
+	}
+
+	void reset_target_caches(JNIEnv* env)
+	{
+		if (!env) return;
+		auto drop = [&](ident_cache& c)
+		{
+			for (int i = 0; i < c.n; i++)
+			{
+				if (c.obj[i]) { env->DeleteGlobalRef(c.obj[i]); c.obj[i] = nullptr; }
+				c.kind[i] = -1;
+			}
+			c.n = 0;
+			c.next = 0;
+		};
+		drop(g_state_cache);
+		drop(g_block_cache);
+	}
+
+	// Translate "block.minecraft.xxx" -> one of target_type, or -1.
+	int classify_block_key(JNIEnv* env, jobject block)
+	{
+		if (!block) return -1;
+		jobject key = nullptr;
+		if (g_jni.block_get_translation_key)
+		{
+			key = env->CallObjectMethod(block, g_jni.block_get_translation_key);
+			if (env->ExceptionCheck()) env->ExceptionClear();
+		}
+		if (!key && g_jni.block_translation_key)
+		{
+			key = env->GetObjectField(block, g_jni.block_translation_key);
+			if (env->ExceptionCheck()) env->ExceptionClear();
+		}
+		if (!key) return -1;
+
+		int kind = -1;
+		const char* s = env->GetStringUTFChars((jstring)key, nullptr);
+		if (s)
+		{
+			if (strstr(s, "shulker_box"))
+				kind = T_SHULKER;
+			else if (strcmp(s, "block.minecraft.chest") == 0 ||
+				strcmp(s, "block.minecraft.trapped_chest") == 0 ||
+				strcmp(s, "block.minecraft.barrel") == 0)
+				kind = T_CHEST;
+			else if (strcmp(s, "block.minecraft.spawner") == 0)
+				kind = T_SPAWNER;
+			else if (strcmp(s, "block.minecraft.end_portal_frame") == 0)
+				kind = T_FRAME;
+			else if (strcmp(s, "block.minecraft.end_portal") == 0)
+				kind = T_ENDPORTAL;
+			else if (strcmp(s, "block.minecraft.obsidian") == 0 ||
+				strcmp(s, "block.minecraft.crying_obsidian") == 0)
+				kind = T_OBSIDIAN;
+			env->ReleaseStringUTFChars((jstring)key, s);
+		}
+		env->DeleteLocalRef(key);
+		return kind;
+	}
+
+	// Classify a BlockState, using the singleton identity caches. Returns one
+	// of target_type or -1 (filters are applied by the caller, not here, so
+	// toggling a filter in the menu takes effect without a rescan).
+	int classify_state(JNIEnv* env, jobject state)
+	{
+		if (!state || !g_jni.state_get_block) return -1;
+
+		int cached;
+		if (cache_lookup(env, g_state_cache, state, &cached))
+			return cached;
+
+		jobject block = env->CallObjectMethod(state, g_jni.state_get_block);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); block = nullptr; }
+		if (!block) return -1;
+
+		int kind;
+		if (cache_lookup(env, g_block_cache, block, &kind))
+		{
+			// Block already classified: skip getTranslationKey() entirely.
+		}
+		else
+		{
+			kind = classify_block_key(env, block);
+			cache_store(env, g_block_cache, block, kind);
+		}
+		env->DeleteLocalRef(block);
+
+		cache_store(env, g_state_cache, state, kind);
+		return kind;
+	}
+
+	// Defined further down (after the JNI resolver); forward-declared here so
+	// the target scanner can build its volume before that point.
+	void build_area(JNIEnv* env, jobject world, double px, double py, double pz, scan_area& out);
+
+	void start_target_scanner(JNIEnv* env, jobject world, double px, double py, double pz)
+	{
+		target_scanner_state& ts = g_target_scanner;
+		build_area(env, world, px, py, pz, ts.area);
+		ts.min_cx = ts.area.minX >> 4;
+		ts.max_cx = ts.area.maxX >> 4;
+		ts.min_cz = ts.area.minZ >> 4;
+		ts.max_cz = ts.area.maxZ >> 4;
+
+		// Visit the chunk column the player is standing in first, then the
+		// surrounding ones. The scan restarts whenever the player moves, so a
+		// corner-first order would keep re-covering ground the player is
+		// already far from and never reach anything worth reporting.
+		int pcx = ((int)floor(px)) >> 4;
+		int pcz = ((int)floor(pz)) >> 4;
+		ts.chunks.clear();
+		ts.chunks.reserve((size_t)(ts.max_cx - ts.min_cx + 1) * (size_t)(ts.max_cz - ts.min_cz + 1));
+		for (int cx = ts.min_cx; cx <= ts.max_cx; cx++)
+			for (int cz = ts.min_cz; cz <= ts.max_cz; cz++)
+				ts.chunks.push_back({cx, cz});
+		std::sort(ts.chunks.begin(), ts.chunks.end(),
+			[pcx, pcz](const std::pair<int, int>& a, const std::pair<int, int>& b)
+			{
+				long long da = (long long)(a.first - pcx) * (a.first - pcx) +
+					(long long)(a.second - pcz) * (a.second - pcz);
+				long long db = (long long)(b.first - pcx) * (b.first - pcx) +
+					(long long)(b.second - pcz) * (b.second - pcz);
+				if (da != db) return da < db;
+				if (a.first != b.first) return a.first < b.first;
+				return a.second < b.second;
+			});
+
+		ts.chunk_i = 0;
+		ts.lx = 0;
+		ts.lz = 0;
+		ts.y = ts.area.minY;
+		ts.org_x = px;
+		ts.org_z = pz;
+		ts.finished = false;
+		ts.active = true;
+		// ts.found is intentionally kept: a restart (player moved) must not
+		// throw away everything already discovered. process_target_chunk()
+		// removes a position again as soon as it re-visits it and finds that
+		// it is no longer a target, so the set cannot go permanently stale.
+	}
+
+	// Advance the chunk-major cursor. Returns true when the whole area is done.
+	bool target_advance(target_scanner_state& ts)
+	{
+		// Inner loop runs over y so a vertical run of identical blocks keeps
+		// hitting the state identity cache.
+		ts.y++;
+		if (ts.y > ts.area.maxY)
+		{
+			ts.y = ts.area.minY;
+			ts.lz++;
+			if (ts.lz > 15)
+			{
+				ts.lz = 0;
+				ts.lx++;
+				if (ts.lx > 15)
+				{
+					ts.lx = 0;
+					ts.chunk_i++;
+					if (ts.chunk_i >= (int)ts.chunks.size()) return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	// Write one line into ~/.minecraft/flaway_basefinder.txt.
+	void log_target_file(const base_finder_target& t, double px, double py, double pz)
+	{
+		if (!globals::base_finder_log_file) return;
+		char buf[256];
+		time_t now_t = time(nullptr);
+		struct tm tmv;
+		localtime_r(&now_t, &tmv);
+		double dx = t.x + 0.5 - px;
+		double dy = t.y + 0.5 - py;
+		double dz = t.z + 0.5 - pz;
+		double d = sqrt(dx * dx + dy * dy + dz * dz);
+		snprintf(buf, sizeof(buf),
+			"%04d-%02d-%02d %02d:%02d:%02d\t%s\t%d\t%d\t%d\td=%.1f",
+			tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+			tmv.tm_hour, tmv.tm_min, tmv.tm_sec,
+			target_name(t.type), t.x, t.y, t.z, d);
+		chat_notify::append_file("flaway_basefinder.txt", buf);
+	}
+
+	// Drain queued chat lines. Rate limited to one message every 2 seconds so
+	// a freshly discovered base cannot flood the chat window.
+	void flush_chat(bool force)
+	{
+		std::vector<std::string> lines;
+		{
+			std::lock_guard<std::mutex> lock(g_chat_mutex);
+			if (g_pending_chat.empty()) return;
+			long long now = now_us();
+			if (!force && now - g_last_chat_us < 2000000) return;
+			int n = (int)g_pending_chat.size();
+			if (n > 3) n = 3;
+			lines.assign(g_pending_chat.begin(), g_pending_chat.begin() + n);
+			g_pending_chat.erase(g_pending_chat.begin(), g_pending_chat.begin() + n);
+			g_last_chat_us = now;
+		}
+		// Never hold a lock while calling into JNI.
+		if (globals::base_finder_log_chat)
+			for (const std::string& l : lines) chat_notify::add(l);
+	}
+
+	void queue_chat(const std::string& line)
+	{
+		std::lock_guard<std::mutex> lock(g_chat_mutex);
+		if (g_pending_chat.size() >= 32) return;
+		g_pending_chat.push_back(line);
+	}
+
+	// Merge a finished scan into g_targets, report every position that has
+	// never been reported before (chat summary + one file line each).
+	void commit_target_scan(target_scanner_state& ts, double px, double py, double pz)
+	{
+		int counts[T_TYPE_COUNT] = { 0 };
+		int new_total = 0;
+		std::string coords;
+		int shown = 0;
+		std::vector<base_finder_target> merged;
+		std::vector<base_finder_target> to_log;
+		merged.reserve(ts.found.size());
+
+		{
+			std::lock_guard<std::mutex> lock(g_mutex);
+			g_targets.clear();
+			g_targets.reserve(ts.found.size());
+
+			for (const auto& kv : ts.found)
+			{
+				int x, y, z;
+				unpack_pos(kv.first, x, y, z);
+				int type = kv.second;
+				// Anything outside the current volume was found on a previous
+				// pass; drop it once the player has moved away from it.
+				if (x < ts.area.minX || x > ts.area.maxX ||
+					y < ts.area.minY || y > ts.area.maxY ||
+					z < ts.area.minZ || z > ts.area.maxZ)
+					continue;
+				if (type < 0 || type >= T_TYPE_COUNT || !target_enabled(type)) continue;
+
+				base_finder_target t{ x, y, z, type };
+				g_targets.push_back(t);
+
+				if (g_reported.insert(kv.first).second)
+				{
+					counts[type]++;
+					new_total++;
+					to_log.push_back(t);
+					if (shown < 3)
+					{
+						if (!coords.empty()) coords += ", ";
+						coords += std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(z);
+						shown++;
+					}
+				}
+			}
+
+			// Safety valve: the set only ever grows during a session.
+			if (g_reported.size() > 400000) g_reported.clear();
+		}
+
+		for (const auto& t : to_log) log_target_file(t, px, py, pz);
+
+		if (new_total > 0 && globals::base_finder_log_chat)
+		{
+			std::string msg = "[BaseFinder] +" + std::to_string(new_total);
+			bool any = false;
+			for (int i = 0; i < T_PLAYER; i++)
+			{
+				if (!counts[i]) continue;
+				if (any) msg += ", ";
+				msg += target_name(i);
+				msg += " x" + std::to_string(counts[i]);
+				any = true;
+			}
+			if (!coords.empty()) msg += " @ " + coords;
+			queue_chat(msg);
+		}
+	}
+
+	// ---- Player targets ---------------------------------------------------
+	std::string player_nick(JNIEnv* env, jobject player)
+	{
+		std::string result;
+		if (!player) return result;
+		jclass pe = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
+		if (!pe) return result;
+		jmethodID mid = env->GetMethodID(pe, sdk::mappings::player_get_game_profile_name,
+			sdk::mappings::player_get_game_profile_sig);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); mid = nullptr; }
+		env->DeleteLocalRef(pe);
+		if (!mid) return result;
+
+		jobject profile = env->CallObjectMethod(player, mid);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); profile = nullptr; }
+		if (!profile) return result;
+
+		jclass gc = env->GetObjectClass(profile);
+		jmethodID gn = gc ? env->GetMethodID(gc, sdk::mappings::game_profile_get_name_name,
+			sdk::mappings::game_profile_get_name_sig) : nullptr;
+		if (env->ExceptionCheck()) { env->ExceptionClear(); gn = nullptr; }
+		if (gn)
+		{
+			jstring name = (jstring)env->CallObjectMethod(profile, gn);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); name = nullptr; }
+			if (name)
+			{
+				const char* utf = env->GetStringUTFChars(name, nullptr);
+				if (utf) { result = utf; env->ReleaseStringUTFChars(name, utf); }
+				env->DeleteLocalRef(name);
+			}
+		}
+		if (gc) env->DeleteLocalRef(gc);
+		env->DeleteLocalRef(profile);
+		return result;
+	}
+
+	void collect_players(JNIEnv* env, jobject world, jobject local_player, double px, double py, double pz)
+	{
+		if (!globals::base_finder_target_players)
+		{
+			std::lock_guard<std::mutex> lock(g_mutex);
+			g_players.clear();
+			return;
+		}
+
+		std::vector<base_finder_player> found;
+		{
+			sdk::world_client wc(world);
+			std::vector<jobject> list = wc.get_players();
+			jclass player_cls = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
+			for (jobject p : list)
+			{
+				if (!p) continue;
+				if (player_cls && !env->IsInstanceOf(p, player_cls)) { env->DeleteLocalRef(p); continue; }
+				if (local_player && env->IsSameObject(p, local_player)) { env->DeleteLocalRef(p); continue; }
+				sdk::entity_client ec(p);
+				int id = ec.get_entity_id();
+				if (id <= 0) { env->DeleteLocalRef(p); continue; }
+				double x = ec.get_x(), y = ec.get_y(), z = ec.get_z();
+				double dx = x - px, dy = y - py, dz = z - pz;
+				// Same reach the ESP uses: tracers past 64 blocks are noise.
+				if (dx * dx + dy * dy + dz * dz > 4096.0) { env->DeleteLocalRef(p); continue; }
+				std::string nick = player_nick(env, p);
+				found.push_back({ id, x, y, z, nick.empty() ? ("#" + std::to_string(id)) : nick });
+				env->DeleteLocalRef(p);
+			}
+			if (player_cls) env->DeleteLocalRef(player_cls);
+		}
+
+		std::vector<std::string> new_lines;
+		std::vector<std::string> new_file;
+		{
+			std::lock_guard<std::mutex> lock(g_mutex);
+			g_players = found;
+			for (const auto& pl : found)
+			{
+				if (g_reported_players.insert(pl.id).second)
+				{
+					double dx = pl.x - px, dy = pl.y - py, dz = pl.z - pz;
+					double d = sqrt(dx * dx + dy * dy + dz * dz);
+					char buf[256];
+					snprintf(buf, sizeof(buf), "[BaseFinder] Player %s @ %.0f %.0f %.0f (d=%.0f)",
+						pl.name.c_str(), pl.x, pl.y, pl.z, d);
+					new_lines.push_back(buf);
+
+					if (globals::base_finder_log_file)
+					{
+						char fbuf[256];
+						snprintf(fbuf, sizeof(fbuf), "Player\t%s\t%.0f\t%.0f\t%.0f\td=%.0f",
+							pl.name.c_str(), pl.x, pl.y, pl.z, d);
+						new_file.push_back(fbuf);
+					}
+				}
+			}
+			if (g_reported_players.size() > 65536) g_reported_players.clear();
+		}
+		// Disk and chat only after g_mutex is released: the draw thread waits
+		// on the same lock every frame.
+		for (const auto& f : new_file)
+			chat_notify::append_file("flaway_basefinder.txt", f);
+		for (const auto& l : new_lines) queue_chat(l);
+	}
+
 	// ---- JNI resolution -----------------------------------------------------------
 	bool resolve_jni(JNIEnv* env)
 	{
-		if (g_cached) return g_jni.world_class != nullptr && g_jni.get_block_state != nullptr;
+		if (g_cached && g_jni.world_class && g_jni.get_block_state) return true;
+
+		// A class/method lookup can legitimately fail for a moment (e.g. the
+		// first frame after the world loads). Latching that failure would
+		// silently disable the module for the rest of the session, so retry —
+		// but at most once a second to keep the retry loop free.
+		long long attempt = now_us();
+		if (g_resolve_attempt_us && attempt - g_resolve_attempt_us < 1000000)
+			return g_cached && g_jni.world_class && g_jni.get_block_state;
+		g_resolve_attempt_us = attempt;
 
 		jclass local = nullptr;
 
@@ -285,8 +839,9 @@ namespace
 			if (env->ExceptionCheck()) env->ExceptionClear();
 		}
 
-		g_cached = true;
-		return g_jni.world_class != nullptr && g_jni.get_block_state != nullptr;
+		bool resolved = g_jni.world_class != nullptr && g_jni.get_block_state != nullptr;
+		g_cached = resolved;
+		return resolved;
 	}
 
 	jobject make_block_pos(JNIEnv* env, int x, int y, int z)
@@ -648,6 +1203,92 @@ namespace
 		}
 	}
 
+	// ---- Target scanning pass (chunk-major, filtered by target_enabled) ----
+	void process_target_chunk(JNIEnv* env, jobject world, double px, double py, double pz)
+	{
+		target_scanner_state& ts = g_target_scanner;
+
+		if (!any_block_target_enabled())
+		{
+			ts.active = false;
+			std::lock_guard<std::mutex> lock(g_mutex);
+			g_targets.clear();
+			return;
+		}
+		if (!ts.active) return;
+
+		// Throughput: the old 6000-block cap bound the scan to ~36k blocks/s
+		// (a full 128-range volume took ~12 minutes). The wall-clock budget is
+		// the real limit now, so fast blocks cost nothing extra while heavy
+		// JNI runs still get cut off at 5 ms per pass.
+		const int block_limit = 100000;
+		int processed = 0;
+		long long frame_start = now_us();
+
+		// isChunkLoaded is per chunk column, so cache it for the column the
+		// cursor is currently inside (16x16xH blocks -> one JNI call).
+		int cached_cx = INT_MAX, cached_cz = INT_MAX;
+		bool cached_loaded = false;
+
+		while (processed < block_limit && !ts.finished && now_us() - frame_start < 4000)
+		{
+			if (ts.chunk_i >= (int)ts.chunks.size()) { ts.finished = true; break; }
+			const std::pair<int, int>& col = ts.chunks[ts.chunk_i];
+			int x = (col.first << 4) + ts.lx;
+			int z = (col.second << 4) + ts.lz;
+			int y = ts.y;
+			uint64_t key = pack_pos(x, y, z);
+
+			if (y >= ts.area.minY && y <= ts.area.maxY && ts.area.contains(x, y, z))
+			{
+				if (col.first != cached_cx || col.second != cached_cz)
+				{
+					cached_cx = col.first;
+					cached_cz = col.second;
+					cached_loaded = chunk_loaded(env, world, col.first << 4, col.second << 4);
+				}
+				if (cached_loaded)
+				{
+					jobject st = get_block_state_at(env, world, x, y, z);
+					if (st)
+					{
+						int kind = classify_state(env, st);
+						env->DeleteLocalRef(st);
+						if (kind >= 0 && kind < T_PLAYER && target_enabled(kind))
+							ts.found[key] = kind;
+						else
+							// Also drop stale hits (chest mined out, filter
+							// switched off) so the display stays truthful.
+							ts.found.erase(key);
+					}
+				}
+			}
+
+			processed++;
+			if (target_advance(ts)) ts.finished = true;
+		}
+
+		if (ts.finished)
+		{
+			commit_target_scan(ts, px, py, pz);
+			ts.active = false;
+			ts.finished_us = now_us();
+			g_last_partial_commit = ts.finished_us;
+		}
+		else
+		{
+			// The volume can take minutes to walk. Publishing what has been
+			// found so far every couple of seconds means the user gets the
+			// report even if the player keeps moving and restarting the scan.
+			long long n = now_us();
+			if (n - g_last_partial_commit >= 2000000)
+			{
+				g_last_partial_commit = n;
+				commit_target_scan(ts, px, py, pz);
+			}
+		}
+	}
+
 	void build_area(JNIEnv* env, jobject world, double px, double py, double pz, scan_area& out)
 	{
 		int r = (int)globals::base_finder_range;
@@ -748,14 +1389,18 @@ void flaway::modules::base_finder::run()
 {
 		try
 		{
+			if (!flaway::instance || !sdk::instance) return;
 			if (!globals::base_finder_enabled)
 			{
 				std::lock_guard<std::mutex> lock(g_mutex);
 				g_cave_blocks.clear();
 				g_solid_blocks.clear();
 				g_click_queue.clear();
+				g_targets.clear();
+				g_players.clear();
 				g_cave_scanner = {};
 				g_bypass_scanner = {};
+				g_target_scanner = {};
 				g_force_restart = false;
 				return;
 			}
@@ -766,12 +1411,11 @@ void flaway::modules::base_finder::run()
 
 			jobject world = sdk::instance->get_world();
 			if (!world) return;
+			// Releases both local refs on every path, including the catch below.
+			ref_guard guard(env, world, nullptr);
 			jobject local_player = sdk::instance->get_player();
-			if (!local_player)
-			{
-				env->DeleteLocalRef(world);
-				return;
-			}
+			if (!local_player) return;
+			guard.b = local_player;
 
 			sdk::entity_client local_entity(local_player);
 			double px = local_entity.get_x();
@@ -780,14 +1424,11 @@ void flaway::modules::base_finder::run()
 
 			bool cave_mode = globals::base_finder_mode == 0 || globals::base_finder_mode == 2;
 			bool bypass_mode = globals::base_finder_mode == 1 || globals::base_finder_mode == 2;
+			bool targets_on = globals::base_finder_targets;
+			bool blocks_on = targets_on && any_block_target_enabled();
 
 			g_frame_counter++;
-			if (g_frame_counter % 10 != 0)
-			{
-				env->DeleteLocalRef(world);
-				env->DeleteLocalRef(local_player);
-				return;
-			}
+			if (g_frame_counter % 10 != 0) return;
 
 			double ddx = px - g_last_px, ddz = pz - g_last_pz;
 			double dy = py - g_last_py;
@@ -823,10 +1464,50 @@ void flaway::modules::base_finder::run()
 				g_click_queue.clear();
 			}
 
-			process_clicks(env, world, local_player);
+			if (blocks_on)
+			{
+				target_scanner_state& ts = g_target_scanner;
+				// Restart ONLY when the volume being scanned no longer
+				// contains the player. The old code also restarted on every
+				// g_force_restart (any step > 8 blocks), which reset the
+				// cursor to the nearest chunk over and over — the scan never
+				// got past the chunk under the player's feet, so it reported
+				// nothing while the player was walking around.
+				if (ts.active)
+				{
+					double r = globals::base_finder_range;
+					double dx = px - ts.org_x, dz = pz - ts.org_z;
+					if (dx * dx + dz * dz > r * r)
+					{
+						commit_target_scan(ts, px, py, pz);
+						ts.active = false;
+						ts.finished_us = now;
+					}
+				}
+				if (!ts.active && now - ts.finished_us >= 500000)
+					start_target_scanner(env, world, px, py, pz);
+				if (ts.active)
+					process_target_chunk(env, world, px, py, pz);
+			}
+			else
+			{
+				// Keep g_reported: toggling the feature off/on must not
+				// re-report everything the user already knows about.
+				std::lock_guard<std::mutex> lock(g_mutex);
+				g_targets.clear();
+				g_target_scanner.active = false;
+			}
 
-			env->DeleteLocalRef(world);
-			env->DeleteLocalRef(local_player);
+			if (targets_on)
+				collect_players(env, world, local_player, px, py, pz);
+			else
+			{
+				std::lock_guard<std::mutex> lock(g_mutex);
+				g_players.clear();
+			}
+
+			process_clicks(env, world, local_player);
+			flush_chat(false);
 		}
 		catch (...)
 		{
@@ -848,10 +1529,14 @@ void flaway::modules::base_finder::draw_boxes()
 		if (!draw_list) return;
 
 		std::vector<base_finder_block> caves, solid;
+		std::vector<base_finder_target> targets;
+		std::vector<base_finder_player> players;
 		{
 			std::lock_guard<std::mutex> lock(g_mutex);
 			caves = g_cave_blocks;
 			solid = g_solid_blocks;
+			targets = g_targets;
+			players = g_players;
 		}
 
 		sdk::camera_data cam = sdk::instance->get_camera();
@@ -869,6 +1554,19 @@ void flaway::modules::base_finder::draw_boxes()
 			(int)(globals::base_finder_bypass_color[1] * 255),
 			(int)(globals::base_finder_bypass_color[2] * 255),
 			(int)(globals::base_finder_bypass_color[3] * 255));
+		// A saved config with alpha 0 would make every marker and tracer
+		// silently invisible — clamp it to something that can always be seen.
+		float ta = globals::base_finder_target_color[3];
+		if (!(ta > 0.05f)) ta = 1.0f;
+		ImU32 target_col = IM_COL32(
+			(int)(globals::base_finder_target_color[0] * 255),
+			(int)(globals::base_finder_target_color[1] * 255),
+			(int)(globals::base_finder_target_color[2] * 255),
+			(int)(ta * 255));
+		// Players stand out from the block targets so a person is never
+		// mistaken for a chest when both tracers are on screen.
+		const ImU32 player_col = IM_COL32(255, 92, 92, (int)(ta * 255));
+		const ImVec2 tracer_origin((float)screen_width * 0.5f, (float)screen_height);
 
 		auto draw_blocks = [&](const std::vector<base_finder_block>& list, ImU32 color)
 		{
@@ -923,6 +1621,47 @@ void flaway::modules::base_finder::draw_boxes()
 
 		draw_blocks(caves, cave_col);
 		draw_blocks(solid, bypass_col);
+
+		// Markers for the recognised targets (chest / shulker / spawner /
+		// portal / obsidian). A circle is one draw instead of 12 edge lines,
+		// so hundreds of targets stay cheap.
+		int marked = 0;
+		const int marker_cap = 400;
+		for (const auto& t : targets)
+		{
+			if (marked >= marker_cap) break;
+			float sx, sy;
+			if (!projection::world_to_screen((float)t.x + 0.5f, (float)t.y + 0.5f,
+				(float)t.z + 0.5f, sx, sy))
+				continue;
+			draw_list->AddCircle(ImVec2(sx, sy), 7.0f, target_col, 14, 1.6f);
+			draw_list->AddCircleFilled(ImVec2(sx, sy), 2.0f, target_col, 8);
+			marked++;
+		}
+		for (const auto& p : players)
+		{
+			float sx, sy;
+			if (!projection::world_to_screen((float)p.x, (float)p.y + 1.0f, (float)p.z, sx, sy))
+				continue;
+			draw_list->AddCircle(ImVec2(sx, sy), 9.0f, player_col, 14, 1.8f);
+		}
+
+		// Tracers from the bottom-center of the screen to every target.
+		if (globals::base_finder_tracers)
+		{
+			auto tracer_to = [&](double wx, double wy, double wz, ImU32 col, float width)
+			{
+				float sx, sy;
+				if (!projection::world_to_screen((float)wx, (float)wy, (float)wz, sx, sy))
+					return;
+				draw_list->AddLine(tracer_origin, ImVec2(sx, sy), col, width);
+				draw_list->AddCircleFilled(ImVec2(sx, sy), 3.0f, col, 8);
+			};
+			for (const auto& t : targets)
+				tracer_to(t.x + 0.5, t.y + 0.5, t.z + 0.5, target_col, 1.6f);
+			for (const auto& p : players)
+				tracer_to(p.x, p.y + 1.0, p.z, player_col, 2.0f);
+		}
 	}
 
 	void flaway::modules::base_finder::shutdown()
@@ -932,13 +1671,27 @@ void flaway::modules::base_finder::draw_boxes()
 			g_cave_blocks.clear();
 			g_solid_blocks.clear();
 			g_click_queue.clear();
+			g_targets.clear();
+			g_players.clear();
 			g_cave_scanner = {};
 			g_bypass_scanner = {};
+			g_target_scanner = {};
+			g_last_partial_commit = 0;
 		}
-		if (!g_cached) return;
+		{
+			// Never hand queued chat lines to a half-torn-down client.
+			std::lock_guard<std::mutex> lock(g_chat_mutex);
+			g_pending_chat.clear();
+		}
+
+		// No `g_cached` early-out here: a partially resolved state can still
+		// hold global refs (identity caches, some classes), and every release
+		// below is a no-op on null anyway.
+		if (!flaway::instance) { g_cached = false; return; }
 
 		auto env = flaway::instance->get_env();
 		if (!env) { g_cached = false; return; }
+		reset_target_caches(env);
 
 		auto release = [&](jclass& c)
 		{
@@ -958,4 +1711,5 @@ void flaway::modules::base_finder::draw_boxes()
 
 		g_jni = {};
 		g_cached = false;
+		g_resolve_attempt_us = 0;
 	}

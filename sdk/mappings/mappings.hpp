@@ -569,6 +569,24 @@ namespace sdk
 		inline constexpr const char* interact_block_name = "method_2896";
 		inline constexpr const char* interact_block_sig = "(Lnet/minecraft/class_746;Lnet/minecraft/class_1268;Lnet/minecraft/class_3965;)Lnet/minecraft/class_1269;";
 
+		// Client-side chat line (ChatHud). Adding a message here only paints it
+		// in the local chat window — nothing is sent to the server.
+		// Chain: MinecraftClient.inGameHud (field_1705) -> InGameHud.getChatHud
+		// (method_1743) -> ChatHud.addMessage(Text) (method_1812), built with
+		// Text.literal(String) (method_43470). All IDs are identical in
+		// yarn-1.21.4, yarn-1.21.8 and yarn-1.21.10.
+		inline constexpr const char* ingamehud_class_sig = "net/minecraft/class_329";
+		inline constexpr const char* minecraftclient_ingamehud_field = "field_1705";
+		inline constexpr const char* minecraftclient_ingamehud_sig = "Lnet/minecraft/class_329;";
+		inline constexpr const char* ingamehud_get_chat_hud_name = "method_1743";
+		inline constexpr const char* ingamehud_get_chat_hud_sig = "()Lnet/minecraft/class_338;";
+		inline constexpr const char* chat_hud_class_sig = "net/minecraft/class_338";
+		inline constexpr const char* chat_hud_add_message_name = "method_1812";
+		inline constexpr const char* chat_hud_add_message_sig = "(Lnet/minecraft/class_2561;)V";
+		inline constexpr const char* text_literal_name = "method_43470";
+		inline constexpr const char* text_literal_sig = "(Ljava/lang/String;)Lnet/minecraft/class_5250;";
+		inline constexpr const char* mutable_text_class_sig = "net/minecraft/class_5250";
+
 		// ChatScreen (class_408) — sendMessage(String, boolean) intercepts chat input
 		inline constexpr const char* chat_screen_class_sig = "net/minecraft/class_408";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/gui/screen/ChatScreen.html#sendMessage(java.lang.String,boolean)

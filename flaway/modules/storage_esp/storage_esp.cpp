@@ -24,10 +24,15 @@ static std::vector<storage_block_data> storage_blocks;
 static storage_esp_camera_data storage_camera;
 static std::mutex storage_blocks_mutex;
 static double g_last_scan_x = 0.0, g_last_scan_y = 0.0, g_last_scan_z = 0.0;
-static int g_last_scan_frame = 0;
-static int g_scan_frame_counter = 0;
+static long long g_last_scan_frame = 0;
+static long long g_scan_frame_counter = 0;
 static int64_t g_last_scan_us = 0;
 static bool g_cached = false;
+static int64_t g_resolve_attempt_us = 0;
+// Set whenever the block list was dropped without a successful scan behind it
+// (module/screen toggled off). Without it the periodic rescan timer below can
+// decide "nothing changed" and keep an empty list on screen.
+static bool g_needs_rescan = false;
 
 // ---- Cached JNI resources (resolved once, reused every frame) --------------
 // These replace the per-frame FindClass/GetMethodID churn that was the main
@@ -54,9 +59,41 @@ static jclass g_java_iterator_class = nullptr;  // java/util/Iterator [global]
 static jmethodID g_iter_has_next_mid = nullptr;
 static jmethodID g_iter_next_mid = nullptr;
 
+// Releases up to two JNI local refs on every exit path of run(), including the
+// catch-all: a throwing run() must not leak references on the render thread.
+struct storage_ref_guard
+{
+	JNIEnv* env;
+	jobject a;
+	jobject b;
+	storage_ref_guard(JNIEnv* e, jobject x, jobject y) : env(e), a(x), b(y) {}
+	~storage_ref_guard()
+	{
+		if (!env) return;
+		if (a) env->DeleteLocalRef(a);
+		if (b) env->DeleteLocalRef(b);
+	}
+	storage_ref_guard(const storage_ref_guard&) = delete;
+	storage_ref_guard& operator=(const storage_ref_guard&) = delete;
+};
+
+static int64_t now_us()
+{
+	return std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 static bool resolve_jni(JNIEnv* env)
 {
-	if (g_cached) return g_block_entities_field != nullptr;
+	if (g_cached && g_block_entities_field) return true;
+
+	// A class lookup can fail transiently (first frames after the world
+	// loads). Latching that failure would leave StorageESP dead for the whole
+	// session, so retry — but at most once a second.
+	int64_t attempt = now_us();
+	if (g_resolve_attempt_us && attempt - g_resolve_attempt_us < 1000000)
+		return g_cached && g_block_entities_field;
+	g_resolve_attempt_us = attempt;
 
 	jclass local = nullptr;
 
@@ -72,7 +109,6 @@ static bool resolve_jni(JNIEnv* env)
 
 	local = sdk::classloader::find_class(env, sdk::mappings::client_world_class_sig);
 	promote(g_client_world_class);
-	g_block_entities_field = nullptr;
 	if (g_client_world_class)
 	{
 		g_block_entities_field = env->GetFieldID(g_client_world_class,
@@ -110,14 +146,14 @@ static bool resolve_jni(JNIEnv* env)
 	local = sdk::classloader::find_class(env, sdk::mappings::container_block_entity_class_sig);
 	promote(g_container_be_class);
 
-	local = env->FindClass("java/util/Set");
+	local = sdk::classloader::find_class(env, "java/util/Set");
 	promote(g_java_set_class);
 	if (g_java_set_class)
 	{
 		g_set_iterator_mid = env->GetMethodID(g_java_set_class, "iterator", "()Ljava/util/Iterator;");
 		if (env->ExceptionCheck()) env->ExceptionClear();
 	}
-	local = env->FindClass("java/util/Iterator");
+	local = sdk::classloader::find_class(env, "java/util/Iterator");
 	promote(g_java_iterator_class);
 	if (g_java_iterator_class)
 	{
@@ -127,8 +163,9 @@ static bool resolve_jni(JNIEnv* env)
 		if (env->ExceptionCheck()) env->ExceptionClear();
 	}
 
-	g_cached = true;
-	return g_block_entities_field != nullptr;
+	bool resolved = g_block_entities_field != nullptr;
+	g_cached = resolved;
+	return resolved;
 }
 
 // A single scan pass over the client's loaded block entities. Returns true on
@@ -215,10 +252,13 @@ void flaway::modules::storage_esp::run()
 {
 	try
 	{
+		if (!flaway::instance || !sdk::instance) return;
+
 		if (!globals::storage_esp_enabled)
 		{
 			std::lock_guard<std::mutex> lock(storage_blocks_mutex);
 			storage_blocks.clear();
+			g_needs_rescan = true;
 			return;
 		}
 
@@ -226,29 +266,32 @@ void flaway::modules::storage_esp::run()
 		{
 			std::lock_guard<std::mutex> lock(storage_blocks_mutex);
 			storage_blocks.clear();
+			g_needs_rescan = true;
 			return;
 		}
 
 		auto env = flaway::instance->get_env();
 		if (!env) return;
 
-		// No scan/draw while a screen is open (inventory, Escape, ...).
+		// No scan while a screen is open (inventory, Escape, ...). The block
+		// list is deliberately NOT dropped here: draw_boxes() already hides
+		// itself, and clearing made every box vanish the moment a chest UI
+		// opened and then pop back after a rescan. g_needs_rescan makes the
+		// first frame after the screen closes refresh the list instead.
 		if (sdk::instance->is_screen_open())
 		{
-			std::lock_guard<std::mutex> lock(storage_blocks_mutex);
-			storage_blocks.clear();
+			g_needs_rescan = true;
 			return;
 		}
 
 		jobject world = sdk::instance->get_world();
 		if (!world) return;
+		// Releases both refs on every exit path, including the catch below.
+		storage_ref_guard guard(env, world, nullptr);
 
 		jobject local_player = sdk::instance->get_player();
-		if (!local_player)
-		{
-			env->DeleteLocalRef(world);
-			return;
-		}
+		if (!local_player) return;
+		guard.b = local_player;
 
 		// Get camera data
 		sdk::camera_data cam = sdk::instance->get_camera();
@@ -285,8 +328,10 @@ void flaway::modules::storage_esp::run()
 			(player_x - g_last_scan_x) * (player_x - g_last_scan_x) +
 			(player_y - g_last_scan_y) * (player_y - g_last_scan_y) +
 			(player_z - g_last_scan_z) * (player_z - g_last_scan_z));
-		bool need_rescan = (move_dist > 2.0) || (g_scan_frame_counter - g_last_scan_frame > 120);
+		bool need_rescan = g_needs_rescan ||
+			(move_dist > 2.0) || (g_scan_frame_counter - g_last_scan_frame > 120);
 
+		size_t block_count = 0;
 		if (need_rescan)
 		{
 			std::vector<storage_block_data> blocks_data;
@@ -299,26 +344,27 @@ void flaway::modules::storage_esp::run()
 			{
 				std::lock_guard<std::mutex> lock(storage_blocks_mutex);
 				storage_blocks = std::move(blocks_data);
-				storage_camera = camera;
 				g_last_scan_x = player_x;
 				g_last_scan_y = player_y;
 				g_last_scan_z = player_z;
 				g_last_scan_frame = g_scan_frame_counter;
+				g_needs_rescan = false;
 			}
+			// On failure the old list is kept (better stale boxes than none)
+			// and g_needs_rescan stays set, so it retries next frame.
 		}
-		else
+
 		{
-			// Reuse cached block list, just update camera for rendering
+			// Refreshed every frame regardless of scan success: a stale camera
+			// shifts the boxes as soon as the player turns.
 			std::lock_guard<std::mutex> lock(storage_blocks_mutex);
+			block_count = storage_blocks.size();
 			storage_camera = camera;
 		}
 
 		if (globals::debug_logging_enabled)
 			logger::log("[storage_esp] scan " + std::to_string(g_last_scan_us / 1000) + " ms, " +
-				std::to_string(storage_blocks.size()) + " blocks");
-
-		env->DeleteLocalRef(world);
-		env->DeleteLocalRef(local_player);
+				std::to_string(block_count) + " blocks");
 	}
 	catch (...)
 	{
@@ -432,9 +478,17 @@ void flaway::modules::storage_esp::draw_boxes()
 
 void flaway::modules::storage_esp::shutdown()
 {
-	std::lock_guard<std::mutex> lock(storage_blocks_mutex);
-	storage_blocks.clear();
-	if (!g_cached) return;
+	{
+		// Scoped: get_env()/DeleteGlobalRef() below must not run while the
+		// render thread waits on this lock in draw_boxes().
+		std::lock_guard<std::mutex> lock(storage_blocks_mutex);
+		storage_blocks.clear();
+		g_needs_rescan = true;
+	}
+
+	// No `g_cached` early-out: a partially resolved state can still hold
+	// global refs, and every release below is a no-op on null anyway.
+	if (!flaway::instance) { g_cached = false; return; }
 
 	auto env = flaway::instance->get_env();
 	if (!env) { g_cached = false; return; }
@@ -461,4 +515,5 @@ void flaway::modules::storage_esp::shutdown()
 	g_iter_has_next_mid = nullptr;
 	g_iter_next_mid = nullptr;
 	g_cached = false;
+	g_resolve_attempt_us = 0;
 }

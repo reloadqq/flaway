@@ -3,18 +3,22 @@
 #include <sdk/mappings/mappings.hpp>
 #include <sdk/classloader.h>
 #include <cstdio>
+#include <atomic>
 #include "../../utils/logger.h"
 
 static jmethodID ORIG_getEntityInteractionRange = nullptr;
 static jmethodID g_method_id = nullptr;
 static jclass g_player_entity_class = nullptr;
-static double g_reach_override = -1.0;
+// Written by the render thread (reach::run/reset), read by whatever game thread
+// performs a reach check - must be atomic, a plain double is a data race.
+static std::atomic<double> g_reach_override{-1.0};
 
 jdouble hkGetEntityInteractionRange(JNIEnv *env, jobject thiz)
 {
-	if (g_reach_override > 0.0)
+	const double override_dist = g_reach_override.load(std::memory_order_acquire);
+	if (override_dist > 0.0)
 	{
-		return static_cast<jdouble>(g_reach_override);
+		return static_cast<jdouble>(override_dist);
 	}
 	
 	if (ORIG_getEntityInteractionRange && thiz && g_player_entity_class)
@@ -47,27 +51,23 @@ bool flaway::modules::reach_hook::init()
 		return false;
 	}
 
-	g_reach_override = -1.0;
+	g_reach_override.store(-1.0, std::memory_order_release);
 	ORIG_getEntityInteractionRange = nullptr;
 
 	logger::log("[reach] init start");
 	logger::log_rss("reach-before-jnihook");
+	// JNIHook_Init is idempotent ("already initialized" -> JNIHOOK_OK), so it is
+	// safe to retry it after a later failure. The refcount below is incremented
+	// ONLY on the success path - incrementing it up front (as this used to) made
+	// it grow by ~60/second whenever init() failed, making the counter useless.
 	if (jnihook_refcount == 0)
 	{
 		jnihook_result_t result = JNIHook_Init(jvm);
-		if (result == JNIHOOK_OK)
-		{
-			jnihook_refcount = 1;
-		}
-		else
+		if (result != JNIHOOK_OK)
 		{
 			logger::log("[reach] JNIHook_Init failed result=" + std::to_string((int)result));
 			return false;
 		}
-	}
-	else
-	{
-		jnihook_refcount++;
 	}
 
 	logger::log_rss("reach-before-find-class");
@@ -109,12 +109,13 @@ bool flaway::modules::reach_hook::init()
 		return false;
 	}
 
+	jnihook_refcount++;
 	return true;
 }
 
 void flaway::modules::reach_hook::shutdown()
 {
-	g_reach_override = -1.0;
+	g_reach_override.store(-1.0, std::memory_order_release);
 
 	// GATE-ONLY teardown: the PlayerEntity class is deliberately NOT restored
 	// via JNIHook_Detach — class redefinition at unhook triggers the delta-JRE
@@ -127,5 +128,5 @@ void flaway::modules::reach_hook::shutdown()
 
 void flaway::modules::reach_hook::set_reach(double distance)
 {
-	g_reach_override = distance;
+	g_reach_override.store(distance, std::memory_order_release);
 }

@@ -229,6 +229,12 @@ static void signal_handler(int sig, siginfo_t* si, void* uc)
             struct sigaction& prev = g_prev[sig];
             if ((prev.sa_flags & SA_SIGINFO) && prev.sa_sigaction)
                 prev.sa_sigaction(sig, si, uc);
+            else if (prev.sa_handler == SIG_DFL)
+            {
+                // SIG_DFL is NULL: the branch below would CALL NULL.
+                signal(sig, SIG_DFL);
+                raise(sig);
+            }
             else if (prev.sa_handler != SIG_IGN)
                 prev.sa_handler(sig);
             else { signal(sig, SIG_DFL); raise(sig); }
@@ -318,7 +324,7 @@ void init()
 
     // Record executable mappings for every loaded library, with their load base,
     // so a crash can be attributed to a concrete library+offset.
-    struct RawMap { uintptr_t start, end, off; char path[512]; };
+    struct RawMap { uintptr_t start, end, off; bool exec; char path[512]; };
     RawMap tmp[256];
     int tmpc = 0;
     FILE* f = fopen("/proc/self/maps", "r");
@@ -330,13 +336,16 @@ void init()
             uintptr_t start = 0, end = 0, off = 0;
             char perms[8] = {0};
             char path[512] = {0};
-            if (sscanf(line, "%lx-%lx %7s %lx %*s %*s %511s", &start, &end, perms, &off, path) >= 4
-                && perms[2] == 'x')
+            // Collect EVERY mapping, not just the executable ones: the mapping
+            // with off == 0 (the ELF header) is r--p and is required to compute
+            // the true load base below.
+            if (sscanf(line, "%lx-%lx %7s %lx %*s %*s %511s", &start, &end, perms, &off, path) >= 4)
             {
                 const char* slash = strrchr(path, '/');
                 const char* base = slash ? slash + 1 : path;
                 RawMap& m = tmp[tmpc++];
                 m.start = start; m.end = end; m.off = off;
+                m.exec = (perms[2] == 'x');
                 snprintf(m.path, sizeof(m.path), "%s", base);
             }
         }
@@ -347,7 +356,7 @@ void init()
     // its lowest mapping) and build the deduplicated range table.
     for (int i = 0; i < tmpc && g_range_count < (int)(sizeof(g_ranges) / sizeof(g_ranges[0])); i++)
     {
-        // Skip if this name+base is already recorded.
+        if (!tmp[i].exec) continue;   // ranges only for executable segments
         uintptr_t base = 0;
         for (int j = 0; j < tmpc; j++)
             if (strcmp(tmp[j].path, tmp[i].path) == 0 && tmp[j].off == 0)
@@ -357,16 +366,19 @@ void init()
                 if (strcmp(tmp[j].path, tmp[i].path) == 0 && (base == 0 || tmp[j].start < base))
                     base = tmp[j].start;
 
+        // One entry per executable mapping (a library may have several), so a
+        // PC landing in any of them resolves to a real range.
         bool dup = false;
         for (int r = 0; r < g_range_count; r++)
-            if (g_ranges[r].base == base && strcmp(g_ranges[r].name, tmp[i].path) == 0)
+            if (g_ranges[r].start == tmp[i].start && g_ranges[r].end == tmp[i].end)
             { dup = true; break; }
         if (dup) continue;
 
         g_ranges[g_range_count].start = tmp[i].start;
         g_ranges[g_range_count].end = tmp[i].end;
         g_ranges[g_range_count].base = base;
-        snprintf(g_ranges[g_range_count].name, sizeof(g_ranges[g_range_count].name), "%s", tmp[i].path);
+        snprintf(g_ranges[g_range_count].name, sizeof(g_ranges[g_range_count].name), "%s",
+                 tmp[i].path[0] ? tmp[i].path : "[anon]");
         if (strcmp(tmp[i].path, "flaway.so") == 0)
             g_flaway_base = base;
         g_range_count++;

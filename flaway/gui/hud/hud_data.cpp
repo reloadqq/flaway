@@ -5,6 +5,8 @@
 #include <sdk/classloader.h>
 #include <sdk/minecraft/entity/entity.h>
 #include <sdk/minecraft/minecraft.h>
+#include <sdk/minecraft/world/world.h>
+#include <sdk/mappings/mappings.hpp>
 
 #include <chrono>
 #include <cstring>
@@ -149,114 +151,189 @@ void refresh_nick() {
     rel(env, pl);
 }
 
+// Minimal base64 decoder. The textures property value is base64, and the
+// literal "/texture/" cannot survive base64 intact — searching the raw string
+// can never match, so the hash never resolved and the 2 s retry gate at
+// refresh_target() never cleared.
+static std::string base64_decode(const std::string& in) {
+    static unsigned char T[256];
+    static bool init = false;
+    if (!init) {
+        for (int i = 0; i < 256; i++) T[i] = 0xFF;
+        const char* alphabet =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; alphabet[i]; i++) T[(unsigned char)alphabet[i]] = (unsigned char)i;
+        init = true;
+    }
+    std::string out;
+    out.reserve(in.size() * 3 / 4 + 4);
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (c == '=' || c == '\n' || c == '\r' || c == ' ') break;
+        if (T[c] == 0xFF) continue;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) { out.push_back((char)((val >> valb) & 0xFF)); valb -= 8; }
+    }
+    return out;
+}
+
 // Resolve the skin textures hash for a player name via the tab list:
-// PlayerListEntry.getProfile() -> GameProfile.getProperties()["textures"] ->
-// base64 JSON -> http://textures.minecraft.net/texture/<hash>
+// GameProfile.getProperties()["textures"] -> base64 JSON -> .../texture/<hash>
+std::string hash_from_game_profile(JNIEnv* env, jobject profile) {
+    std::string hash;
+    if (!env || !profile) return hash;
+    jclass gc = env->GetObjectClass(profile);
+    if (!gc) return hash;
+    jmethodID props = env->GetMethodID(gc, "getProperties", "()Lcom/mojang/authlib/PropertyMap;");
+    check_exc(env);
+    if (props) {
+        jobject map = env->CallObjectMethod(profile, props);
+        if (!check_exc(env) && map) {
+            jclass mc_cls = env->GetObjectClass(map);
+            if (mc_cls) {
+                jmethodID getm = env->GetMethodID(mc_cls, "get", "(Ljava/lang/Object;)Ljava/util/Collection;");
+                check_exc(env);
+                if (getm) {
+                    jstring key = env->NewStringUTF("textures");
+                    jobject coll = key ? env->CallObjectMethod(map, getm, key) : nullptr;
+                    if (key) env->DeleteLocalRef(key);
+                    if (!check_exc(env) && coll) {
+                        jclass cc = env->GetObjectClass(coll);
+                        if (cc) {
+                            jmethodID it_m = env->GetMethodID(cc, "iterator", "()Ljava/util/Iterator;");
+                            check_exc(env);
+                            if (it_m) {
+                                jobject it = env->CallObjectMethod(coll, it_m);
+                                jclass ic = nullptr;
+                                if (!check_exc(env) && it) {
+                                    ic = env->GetObjectClass(it);
+                                    jmethodID hasNext = ic ? env->GetMethodID(ic, "hasNext", "()Z") : nullptr;
+                                    jmethodID next = ic ? env->GetMethodID(ic, "next", "()Ljava/lang/Object;") : nullptr;
+                                    check_exc(env);
+                                    if (hasNext && next && env->CallBooleanMethod(it, hasNext) == JNI_TRUE) {
+                                        jobject prop = env->CallObjectMethod(it, next);
+                                        if (!check_exc(env) && prop) {
+                                            jclass prc = env->GetObjectClass(prop);
+                                            if (prc) {
+                                                jmethodID val = env->GetMethodID(prc, "getValue", "()Ljava/lang/String;");
+                                                check_exc(env);
+                                                if (val) {
+                                                    jstring v = (jstring)env->CallObjectMethod(prop, val);
+                                                    if (!check_exc(env) && v) {
+                                                        std::string json = base64_decode(from_jstring(env, v));
+                                                        size_t p = json.find("/texture/");
+                                                        if (p != std::string::npos) {
+                                                            p += 9;
+                                                            size_t e = p;
+                                                            while (e < json.size() && ((json[e] >= '0' && json[e] <= '9') ||
+                                                            (json[e] >= 'a' && json[e] <= 'f'))) e++;
+                                                            if (e - p >= 32) hash = json.substr(p, e - p);
+                                                        }
+                                                        env->DeleteLocalRef(v);
+                                                    }
+                                                }
+                                                env->DeleteLocalRef(prc);
+                                            }
+                                            env->DeleteLocalRef(prop);
+                                        }
+                                    }
+                                    rel(env, it);
+                                }
+                                if (ic) env->DeleteLocalRef(ic);
+                            }
+                            env->DeleteLocalRef(cc);
+                        }
+                        rel(env, coll);
+                    }
+                }
+                env->DeleteLocalRef(mc_cls);
+            }
+            rel(env, map);
+        }
+    }
+    env->DeleteLocalRef(gc);
+    return hash;
+}
+
+// PlayerListEntry.getProfile() -> GameProfile; fallback: nearby entity GameProfile.
 std::string resolve_skin_hash(JNIEnv* env, const std::string& name) {
     std::string hash;
     if (!env || name.empty() || !sdk::instance) return hash;
     jobject handler = sdk::instance->get_network_handler();
-    if (!handler) return hash;
-    jclass hc = sdk::classloader::find_class(env, sdk::mappings::network_handler_class_sig);
-    if (!hc) { rel(env, handler); return hash; }
-    jmethodID get_entry = env->GetMethodID(hc, sdk::mappings::network_get_entry_by_name_name,
-                                           sdk::mappings::network_get_entry_by_name_sig);
-    check_exc(env);
-    if (get_entry) {
-        jstring jn = env->NewStringUTF(name.c_str());
-        jobject entry = nullptr;
-        if (jn) { entry = env->CallObjectMethod(handler, get_entry, jn); env->DeleteLocalRef(jn); }
-        if (!check_exc(env) && entry) {
-            jclass ec = sdk::classloader::find_class(env, sdk::mappings::player_list_entry_class_sig);
-            if (ec) {
-                jmethodID gp = env->GetMethodID(ec, sdk::mappings::entry_get_profile_name,
-                                                sdk::mappings::entry_get_profile_sig);
-                check_exc(env);
-                if (gp) {
-                    jobject profile = env->CallObjectMethod(entry, gp);
-                    if (!check_exc(env) && profile) {
-                        jclass gc = sdk::classloader::find_class(env, sdk::mappings::game_profile_class_sig);
-                        if (gc) {
-                            jmethodID props = env->GetMethodID(gc, "getProperties", "()Lcom/mojang/authlib/PropertyMap;");
-                            check_exc(env);
-                            if (props) {
-                                jobject map = env->CallObjectMethod(profile, props);
-                                if (!check_exc(env) && map) {
-                                    jclass mc_cls = env->GetObjectClass(map);
-                                    if (mc_cls) {
-                                        jmethodID getm = env->GetMethodID(mc_cls, "get", "(Ljava/lang/Object;)Ljava/util/Collection;");
-                                        check_exc(env);
-                                        if (getm) {
-                                            jstring key = env->NewStringUTF("textures");
-                                            jobject coll = key ? env->CallObjectMethod(map, getm, key) : nullptr;
-                                            if (key) env->DeleteLocalRef(key);
-                                            if (!check_exc(env) && coll) {
-                                                jclass cc = env->GetObjectClass(coll);
-                                                if (cc) {
-                                                    jmethodID it_m = env->GetMethodID(cc, "iterator", "()Ljava/util/Iterator;");
-                                                    check_exc(env);
-                                                    if (it_m) {
-                                                        jobject it = env->CallObjectMethod(coll, it_m);
-                                                        jclass ic = nullptr;
-                                                        if (!check_exc(env) && it) {
-                                                            ic = env->GetObjectClass(it);
-                                                            jmethodID hasNext = ic ? env->GetMethodID(ic, "hasNext", "()Z") : nullptr;
-                                                            jmethodID next = ic ? env->GetMethodID(ic, "next", "()Ljava/lang/Object;") : nullptr;
-                                                            check_exc(env);
-                                                            if (hasNext && next && env->CallBooleanMethod(it, hasNext) == JNI_TRUE) {
-                                                                jobject prop = env->CallObjectMethod(it, next);
-                                                                if (!check_exc(env) && prop) {
-                                                                    jclass prc = env->GetObjectClass(prop);
-                                                                    if (prc) {
-                                                                        jmethodID val = env->GetMethodID(prc, "getValue", "()Ljava/lang/String;");
-                                                                        check_exc(env);
-                                                                        if (val) {
-                                                                            jstring v = (jstring)env->CallObjectMethod(prop, val);
-                                                                            if (!check_exc(env) && v) {
-                                                                                std::string b64 = from_jstring(env, v);
-                                                                                // find ".../texture/<hash>" in the decoded base64 JSON
-                                                                                size_t p = b64.find("/texture/");
-                                                                                if (p != std::string::npos) {
-                                                                                    p += 9;
-                                                                                    size_t e = p;
-                                                                                    while (e < b64.size() && ((b64[e] >= '0' && b64[e] <= '9') ||
-                                                                                    (b64[e] >= 'a' && b64[e] <= 'f'))) e++;
-                                                                                    if (e - p >= 32) hash = b64.substr(p, e - p);
-                                                                                }
-                                                                                env->DeleteLocalRef(v);
-                                                                            }
-                                                                        }
-                                                                        env->DeleteLocalRef(prc);
-                                                                    }
-                                                                    env->DeleteLocalRef(prop);
-                                                                }
-                                                            }
-                                                            rel(env, it);
-                                                        }
-                                                        if (ic) env->DeleteLocalRef(ic);
-                                                    }
-                                                    env->DeleteLocalRef(cc);
-                                                }
-                                                rel(env, coll);
-                                            }
-                                        }
-                                        env->DeleteLocalRef(mc_cls);
-                                    }
-                                    rel(env, map);
-                                }
+    if (handler) {
+        jclass hc = sdk::classloader::find_class(env, sdk::mappings::network_handler_class_sig);
+        if (hc) {
+            jmethodID get_entry = env->GetMethodID(hc, sdk::mappings::network_get_entry_by_name_name,
+                                                   sdk::mappings::network_get_entry_by_name_sig);
+            check_exc(env);
+            if (get_entry) {
+                jstring jn = env->NewStringUTF(name.c_str());
+                jobject entry = nullptr;
+                if (jn) { entry = env->CallObjectMethod(handler, get_entry, jn); env->DeleteLocalRef(jn); }
+                if (!check_exc(env) && entry) {
+                    jclass ec = sdk::classloader::find_class(env, sdk::mappings::player_list_entry_class_sig);
+                    if (ec) {
+                        jmethodID gp = env->GetMethodID(ec, sdk::mappings::entry_get_profile_name,
+                                                        sdk::mappings::entry_get_profile_sig);
+                        check_exc(env);
+                        if (gp) {
+                            jobject profile = env->CallObjectMethod(entry, gp);
+                            if (!check_exc(env) && profile) {
+                                hash = hash_from_game_profile(env, profile);
+                                rel(env, profile);
                             }
-                            env->DeleteLocalRef(gc);
                         }
-                        rel(env, profile);
+                        env->DeleteLocalRef(ec);
+                    }
+                    rel(env, entry);
+                }
+            }
+            env->DeleteLocalRef(hc);
+        }
+        rel(env, handler);
+    }
+    if (!hash.empty()) return hash;
+    // Tab list had no textures (offline / missing property) — try the entity.
+    if (!sdk::instance) return hash;
+    jobject world = sdk::instance->get_world();
+    if (!world) return hash;
+    sdk::world_client wc(world);
+    std::vector<jobject> players = wc.get_players();
+    jclass player_cls = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
+    for (jobject p : players) {
+        if (!p) continue;
+        if (player_cls && !env->IsInstanceOf(p, player_cls)) { env->DeleteLocalRef(p); continue; }
+        jclass pe = env->GetObjectClass(p);
+        jmethodID gp = pe ? env->GetMethodID(pe, sdk::mappings::player_get_game_profile_name,
+                                              sdk::mappings::player_get_game_profile_sig) : nullptr;
+        check_exc(env);
+        if (gp) {
+            jobject profile = env->CallObjectMethod(p, gp);
+            if (!check_exc(env) && profile) {
+                jclass gc = env->GetObjectClass(profile);
+                jmethodID gn = gc ? env->GetMethodID(gc, sdk::mappings::game_profile_get_name_name,
+                                                      sdk::mappings::game_profile_get_name_sig) : nullptr;
+                check_exc(env);
+                bool match = false;
+                if (gn) {
+                    jstring jn2 = (jstring)env->CallObjectMethod(profile, gn);
+                    if (!check_exc(env) && jn2) {
+                        if (from_jstring(env, jn2) == name) match = true;
+                        env->DeleteLocalRef(jn2);
                     }
                 }
-                env->DeleteLocalRef(ec);
+                if (match) hash = hash_from_game_profile(env, profile);
+                if (gc) env->DeleteLocalRef(gc);
+                rel(env, profile);
             }
-            rel(env, entry);
         }
+        if (pe) env->DeleteLocalRef(pe);
+        env->DeleteLocalRef(p);
+        if (!hash.empty()) break;
     }
-    env->DeleteLocalRef(hc);
-    rel(env, handler);
+    if (player_cls) env->DeleteLocalRef(player_cls);
+    env->DeleteLocalRef(world);
     return hash;
 }
 

@@ -40,12 +40,19 @@ thread_local bool flaway::instance_t::attached = false;
 __attribute__((constructor(100)))
 static void early_flaway_instance_init()
 {
-    pthread_mutexattr_t attr;
-    if (pthread_mutexattr_init(&attr) != 0) return;
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init(&flaway::g_instance.mtx, &attr);
-    pthread_mutexattr_destroy(&attr);
+    // Publish the pointer FIRST: ~40 call sites dereference flaway::instance
+    // unconditionally (world.cpp, box.cpp, entity.cpp, player.cpp, ...). If
+    // mutex setup below ever fails, a null instance is an instant SIGSEGV on
+    // any of them, whereas a zero-initialised mtx is a valid default mutex.
     flaway::instance = &flaway::g_instance;
+
+    pthread_mutexattr_t attr;
+    if (pthread_mutexattr_init(&attr) == 0)
+    {
+        pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+        pthread_mutex_init(&flaway::g_instance.mtx, &attr);
+        pthread_mutexattr_destroy(&attr);
+    }
     crash_dump::init();
     linux_hook::install_reinject_signal();
 }
@@ -157,8 +164,15 @@ void flaway::instance_t::shutdown()
     pthread_mutex_unlock(&mtx);
 
     // Wait for the render thread to finish its current frame and exit MainHook
-    // before we destroy the state it may be using.
-    Hook::wait_render_idle();
+    // before we destroy the state it may be using. Re-acquire the mutex on the
+    // exception path so the tail's unconditional unlock stays balanced (and
+    // never runs against an already-unlocked mutex).
+    try {
+        Hook::wait_render_idle();
+    } catch (...) {
+        pthread_mutex_lock(&mtx);
+        throw;
+    }
 
     pthread_mutex_lock(&mtx);
 
@@ -244,24 +258,33 @@ void flaway::instance_t::unhook_all()
 
     logger::log("[flaway] unhook_all: completely unloading all hooks and unloading .so");
 
-    // Persist the current config before unloading.
-    crash_dump::set_phase(1);
-    flaway::config::save_auto();
+    // Persist the current config before unloading. Anything that can throw in
+    // this prelude must reset the idempotency flag AND release the mutex, or
+    // every later get_env() blocks forever and unhook becomes unretryable.
+    try {
+        crash_dump::set_phase(1);
+        flaway::config::save_auto();
 
-    // First thing: stop the swap hook from running any module/JNI/ImGui code.
-    // The render thread (still inside the installed swap hook) may race with
-    // this teardown; from this point MainHook is bypassed and only calls the
-    // original swap. This prevents it from touching the classloader globals
-    // (find_class / re-init) while we are destroying them.
-    logger::log("[flaway] unhook: set_unhooked");
-    Hook::set_unhooked(true);
+        // First thing: stop the swap hook from running any module/JNI/ImGui
+        // code. The render thread (still inside the installed swap hook) may
+        // race with this teardown; from this point MainHook is bypassed and
+        // only calls the original swap. This prevents it from touching the
+        // classloader globals (find_class / re-init) while we are destroying
+        // them.
+        logger::log("[flaway] unhook: set_unhooked");
+        Hook::set_unhooked(true);
 
-    // Clear the Discord Rich Presence right away: the worker is joined here,
-    // so when this returns Discord no longer shows anything about the game.
-    // Must run after set_unhooked so a concurrent frame tick() (which bails
-    // on get_unhooked) can not restart it behind our back.
-    logger::log("[flaway] unhook: stopping discord rpc");
-    discord_rpc::stop();
+        // Clear the Discord Rich Presence right away: the worker is joined
+        // here, so when this returns Discord no longer shows anything about
+        // the game. Must run after set_unhooked so a concurrent frame tick()
+        // (which bails on get_unhooked) can not restart it behind our back.
+        logger::log("[flaway] unhook: stopping discord rpc");
+        discord_rpc::stop();
+    } catch (...) {
+        s_unhook_running = false;
+        pthread_mutex_unlock(&mtx);
+        throw;
+    }
 
     // CRITICAL: release mtx BEFORE waiting for the render thread. The render
     // thread is mid-MainHook->run_all right now and calls get_env() (which
@@ -459,9 +482,15 @@ void flaway::instance_t::unhook_all()
             logger::log("[flaway] unhook: classloader cleanup");
             sdk::classloader::cleanup(env);
             if (env->ExceptionCheck()) env->ExceptionClear();
-            // Detach only if we attached above (attached is thread_local,
-            // reflects THIS thread's state, not the calling thread's).
-            if (jvm) jvm->DetachCurrentThread();
+            // Detach only if WE attached above: thread_local `attached` reflects
+            // THIS thread's state, and env may have come from GetEnv() == JNI_OK
+            // on a thread the library never attached. Detaching a thread the
+            // JVM already owns (or one with Java frames) is a JNI error.
+            if (attached)
+            {
+                jvm->DetachCurrentThread();
+                attached = false;
+            }
         }
     }
     catch (std::exception& e)
@@ -477,7 +506,7 @@ void flaway::instance_t::unhook_all()
     // NOTE: This function must be called from a single thread when the
     //       .so is being unloaded (by unloadsig or other mechanism)
     // The actual .so unloading will be handled by the unloading mechanism
-    logger::log("[flaway] unhook_all completed");
+    try { logger::log("[flaway] unhook_all completed"); } catch (...) {}
 
     // Mark teardown complete so a re-inject (SIGCONT seen during the unhook
     // window) only re-arms AFTER the cleanup above has fully finished.

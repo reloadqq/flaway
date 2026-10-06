@@ -55,20 +55,23 @@ static bool is_keybind_active()
 
 void flaway::modules::reach::run()
 {
-	if (!hook_initialized)
-	{
-		if (reach_hook::init())
-		{
-			hook_initialized = true;
-		}
-	}
-	
+	// Install the hook only once the module is actually wanted: installing it
+	// eagerly meant the game's reach check was intercepted even if the user
+	// never enabled the module.
 	if (!globals::reach_enabled)
 	{
 		reset();
 		reach_toggled = false;
 		last_key_state = false;
 		return;
+	}
+
+	if (!hook_initialized)
+	{
+		if (reach_hook::init())
+		{
+			hook_initialized = true;
+		}
 	}
 
 	// Check keybind based on mode (hold/toggle/always)
@@ -94,5 +97,9 @@ void flaway::modules::reach::reset_hook_state()
 
 void flaway::modules::reach::reset()
 {
-	reach_hook::set_reach(3.0);
+	// -1.0 disables the override: hkGetEntityInteractionRange only honours a
+	// positive value, so the game's own range (creative 5.0, plugin-granted
+	// reach, ...) passes through. The old code pinned 3.0, which clamped
+	// legitimate reach to 3.0 even while the module was OFF.
+	reach_hook::set_reach(-1.0);
 }

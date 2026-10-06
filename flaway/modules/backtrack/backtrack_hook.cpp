@@ -392,7 +392,20 @@ static void packet_processor_thread()
 
 			// Release inside a bounded local frame so Netty/JNI local
 			// refs cannot accumulate on this long-lived thread.
-			g_releasing_packets.store(true, std::memory_order_release);
+			// RAII guard: there is no `finally` in C++. If anything between the
+			// store and the matching clear throws (practically a
+			// std::system_error from lock_guard construction), the flag would
+			// stay true FOREVER and hkChannelRead0 would take the pass-through
+			// branch for the rest of the session — backtrack silently dead,
+			// with no log line.
+			struct ReleasingGuard {
+				std::atomic<bool>& flag;
+				explicit ReleasingGuard(std::atomic<bool>& f) : flag(f)
+				{ flag.store(true, std::memory_order_release); }
+				~ReleasingGuard() { flag.store(false, std::memory_order_release); }
+				ReleasingGuard(const ReleasingGuard&) = delete;
+				ReleasingGuard& operator=(const ReleasingGuard&) = delete;
+			} releasing_guard{ g_releasing_packets };
 			{
 				std::lock_guard<std::recursive_mutex> hlock(g_hook_mutex);
 				if (!packets_to_release.empty() && thread_env &&
@@ -428,7 +441,7 @@ static void packet_processor_thread()
 					if (packet.handler) thread_env->DeleteGlobalRef(packet.handler);
 				}
 			}
-			g_releasing_packets.store(false, std::memory_order_release);
+			// g_releasing_packets is cleared by ReleasingGuard's destructor.
 
 			if (packets_to_release.empty())
 				Sleep(5);
@@ -587,30 +600,23 @@ bool flaway::modules::backtrack_hook::init()
 	}
 	logger::log_debug("[BacktrackHook] Found channelRead method");
 
-	logger::log_debug("[BacktrackHook] Attaching hook to channelRead");
-	g_channelRead_methodID = method_id;
-	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkChannelRead0), &ORIG_channelRead0);
-	if (result != JNIHOOK_OK)
-	{
-		std::stringstream ss;
-		ss << "[BacktrackHook] JNIHook_Attach failed with result=" << result;
-		logger::log_error(ss.str());
-		env->DeleteLocalRef(channel_handler_class);
-		return false;
-	}
-	logger::log_debug("[BacktrackHook] Hook attached successfully");
-
+	// Take the global ref BEFORE the hook goes live. If NewGlobalRef fails we
+	// must bail out here: hkChannelRead0 dereferences g_channel_handler_class,
+	// and at this point the Netty IO thread can already be inside our trampoline
+	// (g_hook_ready is flipped on by the re-arm path as soon as it is set).
 	g_channel_handler_class = reinterpret_cast<jclass>(env->NewGlobalRef(channel_handler_class));
 	env->DeleteLocalRef(channel_handler_class);
-	
 	if (!g_channel_handler_class)
 	{
+		logger::log_error("[BacktrackHook] NewGlobalRef for ChannelInboundHandlerAdapter failed");
 		return false;
 	}
-	
-	// Cache packet classes for fast instanceof checks
+
+	// Cache packet classes for fast instanceof checks - also BEFORE the hook is
+	// attached, so a missing mapping aborts cleanly instead of leaving a live
+	// native bound that can only pass through with g_hook_ready stuck false.
 	logger::log_debug("[BacktrackHook] Caching packet classes");
-	
+
 	// EntityPositionS2CPacket (most common)
 	if (sdk::mappings::entity_position_s2c_packet_class_sig)
 	{
@@ -628,7 +634,7 @@ bool flaway::modules::backtrack_hook::init()
 			logger::log_error("[BacktrackHook] Failed to find EntityPositionS2CPacket");
 		}
 	}
-	
+
 	// EntityMoveS2CPacket
 	if (sdk::mappings::entity_move_s2c_packet_class_sig)
 	{
@@ -642,7 +648,7 @@ bool flaway::modules::backtrack_hook::init()
 			logger::log_debug("[BacktrackHook] Cached EntityMoveS2CPacket");
 		}
 	}
-	
+
 	// EntityTeleportS2CPacket
 	if (sdk::mappings::entity_teleport_s2c_packet_class_sig)
 	{
@@ -656,7 +662,7 @@ bool flaway::modules::backtrack_hook::init()
 			logger::log_debug("[BacktrackHook] Cached EntityTeleportS2CPacket");
 		}
 	}
-	
+
 	// EntityS2CPacket (parent class)
 	if (sdk::mappings::entity_s2c_packet_class_sig)
 	{
@@ -670,18 +676,35 @@ bool flaway::modules::backtrack_hook::init()
 			logger::log_debug("[BacktrackHook] Cached EntityS2CPacket");
 		}
 	}
-	
-	// Mark hook as ready only if we have at least one packet class
-	if (g_entity_position_packet_class || g_entity_move_packet_class || g_entity_teleport_packet_class)
+
+	// Without at least one packet class the hook has nothing useful to do, and
+	// returning after JNIHook_Attach would leave a live trampoline + a global
+	// ref that shutdown() deliberately never frees. Abort before attaching.
+	if (!g_entity_position_packet_class && !g_entity_move_packet_class &&
+	    !g_entity_teleport_packet_class && !g_entity_s2c_packet_class)
 	{
-		g_hook_ready = true;
-		logger::log_debug("[BacktrackHook] Hook marked as ready");
+		logger::log_error("[BacktrackHook] No packet classes cached, aborting init before attach");
+		// Hook was never attached, so the global ref is ours to free here.
+		env->DeleteGlobalRef(g_channel_handler_class);
+		g_channel_handler_class = nullptr;
+		return false;
 	}
-	else
+
+	logger::log_debug("[BacktrackHook] Attaching hook to channelRead");
+	g_channelRead_methodID = method_id;
+	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkChannelRead0), &ORIG_channelRead0);
+	if (result != JNIHOOK_OK)
 	{
-		logger::log_error("[BacktrackHook] No packet classes cached, hook not ready");
+		std::stringstream ss;
+		ss << "[BacktrackHook] JNIHook_Attach failed with result=" << result;
+		logger::log_error(ss.str());
+		return false;
 	}
-	
+	logger::log_debug("[BacktrackHook] Hook attached successfully");
+
+	g_hook_ready = true;
+	logger::log_debug("[BacktrackHook] Hook marked as ready");
+
 	logger::log_debug("[BacktrackHook] init() completed successfully");
 
 	// Start packet processor thread with a large stack: re-delivering packets

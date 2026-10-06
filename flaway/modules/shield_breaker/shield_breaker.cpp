@@ -133,11 +133,12 @@ bool flaway::modules::shield_breaker::is_item(jobject item_stack, const char* it
 void flaway::modules::shield_breaker::swap_to_slot(int slot)
 {
 	if (slot < 0 || slot > 8) return;
-	jobject player = sdk::instance->get_player();
-	if (!player) return;
-	
+	// env first: on the `!env` path we could not DeleteLocalRef(player) anyway.
 	auto env = flaway::instance->get_env();
 	if (!env) return;
+
+	jobject player = sdk::instance->get_player();
+	if (!player) return;
 
 	jclass player_class = env->GetObjectClass(player);
 	if (!player_class)
@@ -322,10 +323,10 @@ static bool is_entity_hit_result(jobject hit_result)
 	if (!env) 
 		return false;
 
-	// Try to get EntityHitResult class using classloader (works on both Fabric and vanilla)
-	// Fabric intermediary: net.minecraft.class_1298
-	// Vanilla obfuscated: foe (but we'll use IsInstanceOf for better compatibility)
-	jclass entity_hit_result_class = sdk::classloader::find_class(env, "net/minecraft/class_1298");
+	// EntityHitResult class: source of truth is sdk/mappings (intermediary
+	// class_3966). class_1298 is NOT EntityHitResult, so the old IsInstanceOf
+	// always failed on Fabric/intermediary clients.
+	jclass entity_hit_result_class = sdk::classloader::find_class(env, sdk::mappings::entity_hit_result_class_sig);
 	if (!entity_hit_result_class)
 	{
 		// Fallback: try vanilla obfuscated name
@@ -361,7 +362,14 @@ static bool is_entity_hit_result(jobject hit_result)
 	}
 
 	const char* name_str = env->GetStringUTFChars(class_name, nullptr);
-		bool is_entity = (strcmp(name_str, "foe") == 0 || strstr(name_str, "class_1298") != nullptr || strstr(name_str, "EntityHitResult") != nullptr);
+	if (!name_str)
+	{
+		env->DeleteLocalRef(class_name);
+		env->DeleteLocalRef(class_class);
+		env->DeleteLocalRef(hit_result_class);
+		return false;
+	}
+		bool is_entity = (strcmp(name_str, "foe") == 0 || strstr(name_str, "class_3966") != nullptr || strstr(name_str, "EntityHitResult") != nullptr);
 	env->ReleaseStringUTFChars(class_name, name_str);
 
 	env->DeleteLocalRef(class_name);
@@ -391,37 +399,25 @@ static jobject get_entity_from_hit_result(jobject hit_result)
 	if (!hit_result_class) 
 		return nullptr;
 
-	// Try vanilla obfuscated names first (for vanilla compatibility)
-	jmethodID get_entity_mid = env->GetMethodID(hit_result_class, "a", "()Lcdv;");
+	// Project's source of truth first (method_17782), then vanilla obfuscated,
+	// then Fabric intermediary - the old code only guessed method_375/field_63037
+	// and never tried the real accessor, so the module never fired on Fabric.
+	jmethodID get_entity_mid = env->GetMethodID(hit_result_class,
+		sdk::mappings::entity_hit_result_get_entity_name,
+		sdk::mappings::entity_hit_result_get_entity_sig);
 	if (env->ExceptionCheck()) env->ExceptionClear();
-	
+
 	jfieldID entity_fid = nullptr;
+	if (!get_entity_mid)
+	{
+		get_entity_mid = env->GetMethodID(hit_result_class, "a", "()Lcdv;");
+		if (env->ExceptionCheck()) env->ExceptionClear();
+	}
+
 	if (!get_entity_mid)
 	{
 		entity_fid = env->GetFieldID(hit_result_class, "b", "Lcdv;");
 		if (env->ExceptionCheck()) env->ExceptionClear();
-	}
-	
-	// If vanilla names failed, try Fabric intermediary names
-	if (!get_entity_mid && !entity_fid)
-		{
-		const char* entity_sig = "Lnet/minecraft/class_1297;"; // Entity class on Fabric
-		
-		// Try common Fabric intermediary method patterns
-		const char* method_names[] = {"method_375", "method_376", "getEntity", "entity"};
-		for (int i = 0; i < 4 && !get_entity_mid; i++)
-		{
-			get_entity_mid = env->GetMethodID(hit_result_class, method_names[i], entity_sig);
-			if (env->ExceptionCheck()) env->ExceptionClear();
-		}
-		
-		// Try common Fabric intermediary field patterns
-		const char* field_names[] = {"field_63037", "field_63038", "entity", "field_entity"};
-		for (int i = 0; i < 4 && !entity_fid; i++)
-		{
-			entity_fid = env->GetFieldID(hit_result_class, field_names[i], entity_sig);
-			if (env->ExceptionCheck()) env->ExceptionClear();
-		}
 	}
 	
 	if (!get_entity_mid && !entity_fid)

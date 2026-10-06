@@ -178,6 +178,10 @@ namespace globals
     bool fullbright_enabled = false;
     int fullbright_keybind = 0;
     double fullbright_gamma = 5.0;
+    bool fog_enabled = false;
+    int fog_mode = 0;
+    float fog_color[4] = {0.55f, 0.65f, 0.75f, 0.35f};
+    float fog_strength = 40.0f;
 
     bool hud_watermark_enabled = false;
     bool hud_target_enabled = false;

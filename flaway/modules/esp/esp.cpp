@@ -28,7 +28,7 @@
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-static std::unordered_map<int, esp_render_entry> g_players; static std::unordered_map<int, esp_render_entry> g_items; static esp_camera_data esp_cam; static std::mutex esp_mutex; static std::deque<esp_pickup_entry> g_pickups; static jobject g_last_world = nullptr; static std::map<int, std::string> g_name_cache; static std::map<int, std::string> g_item_name_cache; static int g_frame_count = 0; struct entity_scan_cache { long long ts = 0; double bxmin = 0, bymin = 0, bzmin = 0; double bxmax = 0, bymax = 0, bzmax = 0; float health = 20.0f, max_health = 20.0f; int hurt_time = 0; }; static std::unordered_map<int,
+static std::unordered_map<int, esp_render_entry> g_players; static std::unordered_map<int, esp_render_entry> g_items; static esp_camera_data esp_cam; static std::mutex esp_mutex; static std::deque<esp_pickup_entry> g_pickups; static jobject g_last_world = nullptr; static std::map<int, std::string> g_name_cache; static std::map<int, std::string> g_item_name_cache; static std::map<int, std::string> g_item_tex_cache; struct entity_scan_cache { long long ts = 0; double bxmin = 0, bymin = 0, bzmin = 0; double bxmax = 0, bymax = 0, bzmax = 0; float health = 20.0f, max_health = 20.0f; int hurt_time = 0; }; static std::unordered_map<int,
 entity_scan_cache> g_scan_cache; static constexpr long long k_scan_interval_us = 200000; static constexpr long long k_fade_in_us = 120000; static constexpr long long k_grace_us = 400000; static constexpr long long k_fade_out_us = 500000; // --- colors ----------------------------------------------------------------
 // Every ESP color is derived from the client (menu) accent: the same
 // hstyle::grad_a / grad_b pair the HUD glass cards use, refreshed once per
@@ -96,8 +96,8 @@ static float draw_name_plate(ImDrawList* dl, float cx, float bottom_y, const cha
     if (!dl || !text || !text[0] || alpha <= 0) return 0.0f;
     ImFont* f = GUI::font_hud_bold();
     if (!f) f = ImGui::GetFont();
-    const float fs = 14.0f;
-    const float pad_x = 11.0f, pad_y = 6.5f, rounding = 9.0f;
+    const float fs = 15.0f;
+    const float pad_x = 20.0f, pad_y = 9.0f, rounding = 10.0f;
     ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, text);
     float w = ts.x + pad_x * 2.0f;
     float h = ts.y + pad_y * 2.0f;
@@ -113,6 +113,7 @@ static float draw_name_plate(ImDrawList* dl, float cx, float bottom_y, const cha
 
 // Dropped-item plate: same glass, but with the vanilla rarity icon box inside.
 static float draw_item_plate(ImDrawList* dl, float cx, float bottom_y, const char* text,
+                             const std::string& tex,
                              unsigned char ir, unsigned char ig, unsigned char ib,
                              int alpha, ImU32 accent, ImU32 accent_hi, float phase) {
     if (!dl || !text || !text[0] || alpha <= 0) return 0.0f;
@@ -130,19 +131,27 @@ static float draw_item_plate(ImDrawList* dl, float cx, float bottom_y, const cha
     dl->AddRectFilled(p0, p1, IM_COL32(ir, ig, ib, a_mul(alpha, 0.10f)), rounding);
     ImVec2 ip0(p0.x + pad_x, p0.y + pad_y);
     ImVec2 ip1(ip0.x + icon_size, ip0.y + icon_size);
-    dl->AddRectFilled(ip0, ip1,
-                      IM_COL32((int)(ir * 0.16f), (int)(ig * 0.16f), (int)(ib * 0.16f), a_mul(alpha, 0.96f)), 5.0f);
-    dl->AddRectFilled(ImVec2(ip0.x + 1.0f, ip0.y + 1.0f), ImVec2(ip1.x - 1.0f, ip0.y + icon_size * 0.45f),
-                      IM_COL32(255, 255, 255, a_mul(alpha, 0.14f)), 4.0f);
-    dl->AddRect(ip0, ip1, IM_COL32(ir, ig, ib, alpha), 5.0f, 0, 1.4f);
-    char glyph[2] = { text[0], 0 };
-    if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
-    if (glyph[0] == 0) glyph[0] = '?';
-    ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
-    float gx = ip0.x + (icon_size - gs.x) * 0.5f;
-    float gy = ip0.y + (icon_size - gs.y) * 0.5f;
-    dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
-    dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
+    unsigned icon_tex = tex.empty() ? 0 : hud_icons::item(tex);
+    if (icon_tex) {
+        dl->AddImageRounded((ImTextureID)(intptr_t)icon_tex, ip0, ip1,
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            IM_COL32(255, 255, 255, a_mul(alpha, 0.97f)), 5.0f);
+        dl->AddRect(ip0, ip1, IM_COL32(ir, ig, ib, alpha), 5.0f, 0, 1.4f);
+    } else {
+        dl->AddRectFilled(ip0, ip1,
+                          IM_COL32((int)(ir * 0.16f), (int)(ig * 0.16f), (int)(ib * 0.16f), a_mul(alpha, 0.96f)), 5.0f);
+        dl->AddRectFilled(ImVec2(ip0.x + 1.0f, ip0.y + 1.0f), ImVec2(ip1.x - 1.0f, ip0.y + icon_size * 0.45f),
+                          IM_COL32(255, 255, 255, a_mul(alpha, 0.14f)), 4.0f);
+        dl->AddRect(ip0, ip1, IM_COL32(ir, ig, ib, alpha), 5.0f, 0, 1.4f);
+        char glyph[2] = { text[0], 0 };
+        if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
+        if (glyph[0] == 0) glyph[0] = '?';
+        ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
+        float gx = ip0.x + (icon_size - gs.x) * 0.5f;
+        float gy = ip0.y + (icon_size - gs.y) * 0.5f;
+        dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
+        dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
+    }
     ImVec2 tp(ip1.x + gap, p0.y + (h - ts.y) * 0.5f);
     dl->AddText(f, fs, ImVec2(tp.x, tp.y + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), text);
     hstyle::gradient_text(dl, tp, text, f, fs, accent_hi, IM_COL32(255, 255, 255, 255), alpha);
@@ -158,21 +167,28 @@ static void draw_item_tile(ImDrawList* dl, float x, float y, const esp_item_slot
     const float s = 19.0f;
     dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s),
                       hstyle::with_a(IM_COL32(11, 12, 16, 245), alpha), 5.0f);
-    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s),
-                      IM_COL32(slot.icon_r, slot.icon_g, slot.icon_b, a_mul(alpha, 0.24f)), 5.0f);
-    dl->AddRectFilled(ImVec2(x + 1.0f, y + 1.0f), ImVec2(x + s - 1.0f, y + s * 0.5f),
-                      IM_COL32(255, 255, 255, a_mul(alpha, 0.10f)), 4.0f);
+    unsigned tex_id = slot.tex.empty() ? 0 : hud_icons::item(slot.tex);
+    if (tex_id) {
+        dl->AddImageRounded((ImTextureID)(intptr_t)tex_id, ImVec2(x, y), ImVec2(x + s, y + s),
+                            ImVec2(0, 0), ImVec2(1, 1),
+                            IM_COL32(255, 255, 255, a_mul(alpha, 0.97f)), 5.0f);
+    } else {
+        dl->AddRectFilled(ImVec2(x, y), ImVec2(x + s, y + s),
+                          IM_COL32(slot.icon_r, slot.icon_g, slot.icon_b, a_mul(alpha, 0.24f)), 5.0f);
+        dl->AddRectFilled(ImVec2(x + 1.0f, y + 1.0f), ImVec2(x + s - 1.0f, y + s * 0.5f),
+                          IM_COL32(255, 255, 255, a_mul(alpha, 0.10f)), 4.0f);
+        char glyph[2] = { slot.name.empty() ? '?' : slot.name[0], 0 };
+        if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
+        if (glyph[0] == 0) glyph[0] = '?';
+        const float fs = 12.0f;
+        ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
+        float gx = x + (s - gs.x) * 0.5f;
+        float gy = y + (s - gs.y) * 0.5f - (slot.count > 1 ? 1.5f : 0.0f);
+        dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
+        dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
+    }
     dl->AddRect(ImVec2(x, y), ImVec2(x + s, y + s),
                 hstyle::with_a(accent, a_mul(alpha, 0.90f)), 5.0f, 0, 1.4f);
-    char glyph[2] = { slot.name.empty() ? '?' : slot.name[0], 0 };
-    if (glyph[0] >= 'a' && glyph[0] <= 'z') glyph[0] = (char)(glyph[0] - 'a' + 'A');
-    if (glyph[0] == 0) glyph[0] = '?';
-    const float fs = 12.0f;
-    ImVec2 gs = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, glyph);
-    float gx = x + (s - gs.x) * 0.5f;
-    float gy = y + (s - gs.y) * 0.5f - (slot.count > 1 ? 1.5f : 0.0f);
-    dl->AddText(f, fs, ImVec2(gx, gy + 1.5f), IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), glyph);
-    dl->AddText(f, fs, ImVec2(gx, gy), IM_COL32(245, 248, 255, a_mul(alpha, 0.97f)), glyph);
     if (slot.count > 1) {
         std::string badge = "x" + std::to_string(slot.count);
         const float bfs = 10.0f;
@@ -305,7 +321,7 @@ true; } } static void update_item_render(esp_render_entry& entry, double x, doub
     for (int i = 0; i < 9; i++) st.current[i] += (st.target[i] - st.current[i]) * f;
 } static int compute_alpha(const
 esp_render_entry& entry, long long now) { long long age = now - entry.created_us; long long since_seen = now - entry.last_seen_us; if (age < k_fade_in_us) return (int)(255 * (double)age / (double)k_fade_in_us); if (since_seen < k_grace_us) return 255; long long fade_elapsed = since_seen - k_grace_us; if (fade_elapsed >= k_fade_out_us) return 0; return (int)(255 * (1.0 - (double)fade_elapsed / (double)k_fade_out_us)); } void flaway::modules::esp::run() { { std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; long long ts = now_us(); for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it != g_items.end(); ) { if (it->second.last_seen_us <= 0 || ts - it->second.last_seen_us > stale_threshold) it = g_items.erase(it); else ++it; } } bool esp_any = globals::box_enabled || globals::esp_health_bar || globals::esp_name_enabled || globals::esp_item_enabled || globals::esp_tracers || globals::esp_arrows || globals::hud_target_enabled || globals::hud_pickups_enabled; bool want_hide =
-esp_any && globals::esp_hide_vanilla_names; nametag_hook::set_enabled(want_hide); if (want_hide && !nametag_hook::is_initialized()) nametag_hook::init(); if (!esp_any) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); return; } auto env = flaway::instance->get_env(); if (!env || !sdk::instance) { return; } if (sdk::instance->is_screen_open()) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); return; } { jobject player = sdk::instance->get_player(); if (player) { sdk::
+esp_any && globals::esp_hide_vanilla_names; nametag_hook::set_enabled(want_hide); if (want_hide && !nametag_hook::is_initialized()) nametag_hook::init(); if (!esp_any) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); g_item_tex_cache.clear(); return; } auto env = flaway::instance->get_env(); if (!env || !sdk::instance) { return; } if (sdk::instance->is_screen_open()) { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); return; } { jobject player = sdk::instance->get_player(); if (player) { sdk::
 entity_client local(player); esp_camera_data cam; cam.cam_x = local.get_x(); cam.cam_y = local.get_y() + 1.62; cam.cam_z = local.get_z(); cam.yaw = local.get_yaw(); cam.pitch = local.get_pitch(); cam.fov = 70.0f; { std::lock_guard<std::mutex> lock(esp_mutex); if (esp_cam.fov > 1.0f) cam.fov = esp_cam.fov; esp_cam = cam; } env->DeleteLocalRef(player); } } static auto g_last_scan = std::chrono::steady_clock::now();
     auto g_now = std::chrono::steady_clock::now();
     // 100 ms (10 Hz) instead of 300 ms: player positions are refreshed much
@@ -315,24 +331,24 @@ entity_client local(player); esp_camera_data cam; cam.cam_x = local.get_x(); cam
     // on longer intervals further down.
     constexpr auto k_scan_interval = std::chrono::milliseconds(100);
     if (g_now - g_last_scan < k_scan_interval) return; g_last_scan = g_now
-; jobject world = sdk::instance->get_world(); if (!world) { if (g_last_world) { env->DeleteGlobalRef(g_last_world); g_last_world = nullptr; } std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); return; } if (g_last_world) { if (!env->IsSameObject(g_last_world, world)) { env->DeleteGlobalRef(g_last_world); g_last_world = env->NewGlobalRef(world); g_name_cache.clear(); g_item_name_cache.clear(); std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); } } else g_last_world = env->NewGlobalRef(world); jobject player = sdk::instance->get_player
+; jobject world = sdk::instance->get_world(); if (!world) { if (g_last_world) { env->DeleteGlobalRef(g_last_world); g_last_world = nullptr; } std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); return; } if (g_last_world) { if (!env->IsSameObject(g_last_world, world)) { env->DeleteGlobalRef(g_last_world); g_last_world = env->NewGlobalRef(world); g_name_cache.clear(); g_item_name_cache.clear(); g_item_tex_cache.clear(); std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); } } else g_last_world = env->NewGlobalRef(world); jobject player = sdk::instance->get_player
 (); if (!player) { env->DeleteLocalRef(world); return; } sdk::camera_data cam = sdk::instance->get_camera(); double eye_x, eye_y, eye_z; float cam_yaw, cam_pitch, cam_fov = 70.0f; if (cam.valid) { eye_x = cam.x; eye_y = cam.y; eye_z = cam.z; cam_yaw = cam.yaw; cam_pitch = cam.pitch; cam_fov = cam.fov; } else { sdk::entity_client player_entity(player); eye_x = player_entity.get_x(); eye_y = player_entity.get_y() + 1.62; eye_z = player_entity.get_z(); cam_yaw = player_entity.get_yaw(); cam_pitch = player_entity.get_pitch(); } sdk::world_client wc(world); std::vector<jobject> wplayers = wc.
 get_players(); jclass living_cls = sdk::classloader::find_class(env, sdk::mappings::living_entity_class_sig); jmethodID get_health_mid = nullptr; jmethodID get_max_health_mid = nullptr; static jmethodID s_health_mid = nullptr; static jmethodID s_max_health_mid = nullptr; if (living_cls) { if (!s_health_mid) { s_health_mid = env->GetMethodID(living_cls, sdk::mappings::living_entity_get_health_name, sdk::mappings::living_entity_get_health_sig); if (env->ExceptionCheck()) env->ExceptionClear(); } if (!s_max_health_mid) { s_max_health_mid = env->GetMethodID(living_cls, sdk::mappings::
 living_entity_get_max_health_name, sdk::mappings::living_entity_get_max_health_sig); if (env->ExceptionCheck()) env->ExceptionClear(); } get_health_mid = s_health_mid; get_max_health_mid = s_max_health_mid; } static jfieldID s_hurt_time_fid = nullptr; if (living_cls && !s_hurt_time_fid) { s_hurt_time_fid = env->GetFieldID(living_cls, sdk::mappings::living_entity_hurt_time_name, sdk::mappings::living_entity_hurt_time_sig); if (env->ExceptionCheck()) env->ExceptionClear(); } static long long last_item_fill_us = 0; bool fill_items_pass = (globals::esp_item_enabled || globals::hud_target_enabled) && (last_item_fill_us == 0 || now_us() - last_item_fill_us >= 2000000); if (fill_items_pass) last_item_fill_us = now_us(); for (jobject p : wplayers) { if (!p) continue; sdk::entity_client ec(p); if (ec.is_same_object(player)) continue; int eid = ec.get_entity_id(); if (eid <= 0) continue; double ex
 = ec.get_x(); double ey = ec.get_y(); double ez = ec.get_z(); double dxp = ex - eye_x; double dyp = ey - eye_y; double dzp = ez - eye_z; if (dxp * dxp + dyp * dyp + dzp * dzp > 4096.0) continue; double bxmin = ex - 0.3, bymin = ey, bzmin = ez - 0.3; double bxmax = ex + 0.3, bymax = ey + 1.8, bzmax = ez + 0.3; float health = 20.0f, max_health = 20.0f; int hurt_time = 0; long long ts_now = now_us(); auto scc = g_scan_cache.find(eid); if (scc != g_scan_cache.end() && ts_now - scc->second.ts < k_scan_interval_us) { bxmin = scc->second.bxmin; bymin = scc->second.bymin; bzmin = scc->second.bzmin; bxmax = scc->second.bxmax; bymax = scc->second.bymax; bzmax = scc->second.bzmax; health = scc->second.health; max_health = scc->second.max_health; hurt_time = scc->second.hurt_time; } else { jobject bb = ec.get_bounding_box(); if (bb) { sdk::box_client bx(bb); bxmin = bx.get_min_x(); bymin = bx.get_min_y(); bzmin = bx.get_min_z(); bxmax = bx.get_max_x(); bymax = bx.get_max_y(); bzmax = bx.get_max_z(); env->DeleteLocalRef(bb); } if (get_health_mid && get_max_health_mid) { health = env->CallFloatMethod(p, get_health_mid); if (env->ExceptionCheck()) { env->ExceptionClear(); health = 20.0f; } max_health = env->CallFloatMethod(p, get_max_health_mid);
 if (env->ExceptionCheck()) { env->ExceptionClear(); max_health = 20.0f; } } entity_scan_cache& sc = g_scan_cache[eid]; sc.ts = ts_now; sc.bxmin = bxmin; sc.bymin = bymin; sc.bzmin = bzmin; sc.bxmax = bxmax; sc.bymax = bymax; sc.bzmax = bzmax; sc.health = health; sc.max_health = max_health; if (s_hurt_time_fid) { sc.hurt_time = env->GetIntField(p, s_hurt_time_fid); if (env->ExceptionCheck()) env->ExceptionClear(); } } std::string name; auto ncit = g_name_cache.find(eid); if (ncit != g_name_cache.end()) name = ncit->second; else { name = get_player_nick(env, p); if (name.empty()) name = get_entity_name(env, p); if (!name.empty()) g_name_cache[eid] = clean_name(name); } std::vector<esp_item_slot> items; if (
-fill_items_pass) fill_player_equipment(env, p, items); long long ts = now_us(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_players[eid]; entry.name = name; entry.health = health; entry.max_health = max_health; entry.hurt_time = hurt_time; entry.is_friend = flaway::modules::friend_manager::is_friend(name); entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts; if (fill_items_pass) entry.items = std::move(items); update_entity_render(entry, ex, ey, ez, bxmin, bymin, bzmin, bxmax, bymax, bzmax, ts); } if (globals::mobstats_enabled && living_cls) { jclass player_cls = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
+fill_items_pass) fill_player_equipment(env, p, items); long long ts = now_us(); const int locked_id = flaway::modules::aimassist::get_locked_id(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_players[eid]; entry.name = name; entry.health = health; entry.max_health = max_health; entry.hurt_time = hurt_time; entry.is_friend = flaway::modules::friend_manager::is_friend(name); entry.is_target = (eid == locked_id); entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts; if (fill_items_pass) entry.items = std::move(items); update_entity_render(entry, ex, ey, ez, bxmin, bymin, bzmin, bxmax, bymax, bzmax, ts); } if (globals::mobstats_enabled && living_cls) { jclass player_cls = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
 std::vector<jobject> all_entities = wc.get_entities(); for (jobject e : all_entities) { if (!e) continue; if (player_cls && env->IsInstanceOf(e, player_cls)) { env->DeleteLocalRef(e); continue; } if (!env->IsInstanceOf(e, living_cls)) { env->DeleteLocalRef(e); continue; } sdk::entity_client ec(e); int eid = ec.get_entity_id(); if (eid <= 0) { env->DeleteLocalRef(e); continue; } double ex = ec.get_x(); double ey = ec.get_y(); double ez = ec.get_z(); double dxp = ex - eye_x; double dyp = ey - eye_y; double dzp = ez - eye_z; if (dxp * dxp + dyp * dyp + dzp * dzp > 4096.0) { env->DeleteLocalRef(e
 ); continue; } double bxmin = ex - 0.3, bymin = ey, bzmin = ez - 0.3; double bxmax = ex + 0.3, bymax = ey + 1.8, bzmax = ez + 0.3; float health = 20.0f, max_health = 20.0f; int hurt_time = 0; long long ts_now = now_us(); auto scc = g_scan_cache.find(eid); if (scc != g_scan_cache.end() && ts_now - scc->second.ts < k_scan_interval_us) { bxmin = scc->second.bxmin; bymin = scc->second.bymin; bzmin = scc->second.bzmin; bxmax = scc->second.bxmax; bymax = scc->second.bymax; bzmax = scc->second.bzmax; health = scc->second.health; max_health = scc->second.max_health; hurt_time = scc->second.hurt_time; } else { jobject bb = ec.get_bounding_box(); if (bb)
 { sdk::box_client bx(bb); bxmin = bx.get_min_x(); bymin = bx.get_min_y(); bzmin = bx.get_min_z(); bxmax = bx.get_max_x(); bymax = bx.get_max_y(); bzmax = bx.get_max_z(); env->DeleteLocalRef(bb); } if (get_health_mid && get_max_health_mid) { health = env->CallFloatMethod(e, get_health_mid); if (env->ExceptionCheck()) { env->ExceptionClear(); health = 20.0f; } max_health = env->CallFloatMethod(e, get_max_health_mid); if (env->ExceptionCheck()) { env->ExceptionClear(); max_health = 20.0f; } } entity_scan_cache& sc = g_scan_cache[eid]; sc.ts = ts_now; sc.bxmin = bxmin; sc.bymin = bymin; sc.bzmin
-= bzmin; sc.bxmax = bxmax; sc.bymax = bymax; sc.bzmax = bzmax; sc.health = health; sc.max_health = max_health; if (s_hurt_time_fid) { sc.hurt_time = env->GetIntField(e, s_hurt_time_fid); if (env->ExceptionCheck()) env->ExceptionClear(); } } std::string name; auto ncit = g_name_cache.find(eid); if (ncit != g_name_cache.end()) name = ncit->second; else { name = get_entity_name(env, e); if (!name.empty()) g_name_cache[eid] = clean_name(name); } long long ts = now_us(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_players[eid]; entry.name = name; entry.health = health; entry.max_health = max_health; entry.hurt_time = hurt_time; entry.is_friend = flaway::modules::friend_manager::is_friend(name); entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts; update_entity_render(
+= bzmin; sc.bxmax = bxmax; sc.bymax = bymax; sc.bzmax = bzmax; sc.health = health; sc.max_health = max_health; if (s_hurt_time_fid) { sc.hurt_time = env->GetIntField(e, s_hurt_time_fid); if (env->ExceptionCheck()) env->ExceptionClear(); } } std::string name; auto ncit = g_name_cache.find(eid); if (ncit != g_name_cache.end()) name = ncit->second; else { name = get_entity_name(env, e); if (!name.empty()) g_name_cache[eid] = clean_name(name); } long long ts = now_us(); const int locked_id = flaway::modules::aimassist::get_locked_id(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_players[eid]; entry.name = name; entry.health = health; entry.max_health = max_health; entry.hurt_time = hurt_time; entry.is_friend = flaway::modules::friend_manager::is_friend(name); entry.is_target = (eid == locked_id); entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts; update_entity_render(
 entry, ex, ey, ez, bxmin, bymin, bzmin, bxmax, bymax, bzmax, ts); env->DeleteLocalRef(e); } if (player_cls) env->DeleteLocalRef(player_cls); } if (living_cls) env->DeleteLocalRef(living_cls); if (globals::esp_item_enabled || globals::hud_pickups_enabled) { jclass item_entity_cls = sdk::classloader::find_class(env, sdk::mappings::item_entity_class_sig); if (item_entity_cls) { std::vector<jobject> items = wc.get_entities_by_class(item_entity_cls); static jmethodID s_get_stack_mid = nullptr; if (!s_get_stack_mid) { s_get_stack_mid = env->GetMethodID(item_entity_cls, sdk::mappings::item_entity_get_stack_name, sdk::mappings::
 item_entity_get_stack_sig); if (env->ExceptionCheck()) env->ExceptionClear(); if (!s_get_stack_mid) { s_get_stack_mid = env->GetMethodID(item_entity_cls, "getStack", "()Lnet/minecraft/class_1799;"); if (env->ExceptionCheck()) env->ExceptionClear(); } } for (jobject e : items) { if (!e) continue; sdk::entity_client ec(e); int eid = ec.get_entity_id(); if (eid <= 0) continue; double ix = ec.get_x(); double iy = ec.get_y(); double iz = ec.get_z(); double dxp = ix - eye_x; double dyp = iy - eye_y; double dzp = iz - eye_z; if (dxp * dxp + dyp * dyp + dzp * dzp > 4096.0) continue; std::string iname
-; unsigned char icon_r = 88, icon_g = 140, icon_b = 255; std::string tex; auto icit = g_item_name_cache.find(eid); if (icit != g_item_name_cache.end() && !icit->second.empty()) { iname = icit->second; } else if (s_get_stack_mid) { jobject stack = env->CallObjectMethod(e, s_get_stack_mid); if (env->ExceptionCheck()) env->ExceptionClear(); if (stack) { tex = stack_tex_suffix(env, stack); get_item_rarity_color(env, stack, icon_r, icon_g, icon_b); jclass sc = env->GetObjectClass(stack); if (sc) { static jmethodID s_get_name_mid = nullptr; jmethodID get_name_mid = cache_method(env, sc, sdk::mappings::itemstack_get_name_name, sdk::mappings::
+; unsigned char icon_r = 88, icon_g = 140, icon_b = 255; std::string tex; auto icit = g_item_name_cache.find(eid); auto itit = g_item_tex_cache.find(eid); if (icit != g_item_name_cache.end() && !icit->second.empty()) { iname = icit->second; if (itit != g_item_tex_cache.end()) tex = itit->second; if (tex.empty() && s_get_stack_mid) { jobject stack = env->CallObjectMethod(e, s_get_stack_mid); if (env->ExceptionCheck()) { env->ExceptionClear(); stack = nullptr; } if (stack) { tex = stack_tex_suffix(env, stack); if (!tex.empty()) g_item_tex_cache[eid] = tex; env->DeleteLocalRef(stack); } } } else if (s_get_stack_mid) { jobject stack = env->CallObjectMethod(e, s_get_stack_mid); if (env->ExceptionCheck()) env->ExceptionClear(); if (stack) { tex = stack_tex_suffix(env, stack); get_item_rarity_color(env, stack, icon_r, icon_g, icon_b); jclass sc = env->GetObjectClass(stack); if (sc) { static jmethodID s_get_name_mid = nullptr; jmethodID get_name_mid = cache_method(env, sc, sdk::mappings::itemstack_get_name_name, sdk::mappings::
 itemstack_get_name_sig, s_get_name_mid); if (get_name_mid) { jobject name_text = env->CallObjectMethod(stack, get_name_mid); if (env->ExceptionCheck()) env->ExceptionClear(); if (name_text) { jclass tc = sdk::classloader::find_class(env, sdk::mappings::text_class_sig); if (tc) { static jmethodID s_text_str_mid = nullptr; jmethodID str_mid = cache_method(env, tc, sdk::mappings::text_get_string_name, sdk::mappings::text_get_string_sig, s_text_str_mid); if (str_mid) { jstring s = (jstring)env->CallObjectMethod(name_text, str_mid, 0x7FFFFFFF); if (env->ExceptionCheck()) env->ExceptionClear(); if
 (s) { const char* utf = env->GetStringUTFChars(s, nullptr); if (utf) { iname = utf; env->ReleaseStringUTFChars(s, utf); } env->DeleteLocalRef(s); } } env->DeleteLocalRef(tc); } env->DeleteLocalRef(name_text); } } env->DeleteLocalRef(sc); } if (iname.empty()) { jclass sc2 = env->GetObjectClass(stack); if (sc2) { static jmethodID s_get_item_mid = nullptr; jmethodID get_item_mid = cache_method(env, sc2, sdk::mappings::itemstack_get_item_name, sdk::mappings::itemstack_get_item_sig, s_get_item_mid); if (get_item_mid) { jobject item = env->CallObjectMethod(stack, get_item_mid); if (env->
 ExceptionCheck()) env->ExceptionClear(); if (item) { jclass ic = env->GetObjectClass(item); if (ic) { static jmethodID s_get_key_mid = nullptr; jmethodID get_key_mid = cache_method(env, ic, sdk::mappings::item_get_translation_key_name, sdk::mappings::item_get_translation_key_sig, s_get_key_mid); if (get_key_mid) { jstring key = (jstring)env->CallObjectMethod(item, get_key_mid); if (env->ExceptionCheck()) env->ExceptionClear(); if (key) { const char* ckey = env->GetStringUTFChars(key, nullptr); if (ckey) { iname = ckey; env->ReleaseStringUTFChars(key, ckey); } env->DeleteLocalRef(key); } } env
-->DeleteLocalRef(ic); } env->DeleteLocalRef(item); } } env->DeleteLocalRef(sc2); } env->DeleteLocalRef(stack); } else { env->DeleteLocalRef(stack); } } } if (iname.empty()) iname = get_entity_name(env, e); if (!iname.empty()) g_item_name_cache[eid] = clean_name(iname); long long ts = now_us(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_items[eid]; bool fresh = (entry.created_us == 0); entry.name = iname; entry.icon_r = icon_r; entry.icon_g = icon_g; entry.icon_b = icon_b; entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts;
+->DeleteLocalRef(ic); } env->DeleteLocalRef(item); } } env->DeleteLocalRef(sc2); } env->DeleteLocalRef(stack); } else { env->DeleteLocalRef(stack); } } } if (iname.empty()) iname = get_entity_name(env, e); if (!iname.empty()) g_item_name_cache[eid] = clean_name(iname); if (!tex.empty()) g_item_tex_cache[eid] = tex; long long ts = now_us(); std::lock_guard<std::mutex> lock(esp_mutex); esp_render_entry& entry = g_items[eid]; bool fresh = (entry.created_us == 0); entry.name = iname; entry.tex = tex; entry.icon_r = icon_r; entry.icon_g = icon_g; entry.icon_b = icon_b; entry.last_seen_us = ts; if (entry.created_us == 0) entry.created_us = ts;
 update_item_render(entry, ix, iy, iz, ts); if (fresh && !iname.empty() && dxp * dxp + dyp * dyp + dzp * dzp <= 16.0) { g_pickups.push_back({iname, icon_r, icon_g, icon_b, ts, tex}); if (g_pickups.size() > 8) g_pickups.pop_front(); } } for (jobject e : items) if (e) env->DeleteLocalRef(e); env->DeleteLocalRef(item_entity_cls); } } { std::lock_guard<std::mutex> lock(esp_mutex); esp_cam.cam_x = eye_x; esp_cam.cam_y = eye_y; esp_cam.cam_z = eye_z; esp_cam.yaw = cam_yaw; esp_cam.pitch = cam_pitch; esp_cam.fov = cam_fov; if (esp_cam.fov < 1.0f) esp_cam.fov = 70.0f; } for (jobject p : wplayers) if (p) env->
 DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } void flaway::modules::esp::draw_boxes() {
     const bool want_box = globals::box_enabled;
@@ -367,7 +383,6 @@ DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } vo
     for (auto& kv : pc) step_smooth(kv.second.smooth);
     for (auto& kv : ic) step_smooth(kv.second.smooth);
     projection::set_view((float)cam.cam_x, (float)cam.cam_y, (float)cam.cam_z, cam.yaw, cam.pitch, cam.fov, sw, sh);
-    g_frame_count++;
     long long ts = now_us();
     float offset = globals::esp_vertical_offset;
     int locked_id = flaway::modules::aimassist::get_locked_id();
@@ -465,26 +480,81 @@ DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } vo
             if (hp > 1.0f) hp = 1.0f;
             if (hp < 0.0f) hp = 0.0f;
             const float bw = 5.0f;
-            float bx = min_sx - bw - 5.0f;
-            float bh = max_sy - min_sy;
-            float fh = bh * hp;
-            dl->AddRectFilled(ImVec2(bx - 1.5f, min_sy - 1.5f), ImVec2(bx + bw + 1.5f, max_sy + 1.5f),
-                              IM_COL32(0, 0, 0, a_mul(alpha, 0.65f)), 3.5f);
-            dl->AddRectFilled(ImVec2(bx, min_sy), ImVec2(bx + bw, max_sy),
-                              hstyle::with_a(IM_COL32(34, 36, 44, 255), a_mul(alpha, 0.90f)), 2.5f);
-            if (fh > 0.5f) {
+            // Left edge from projected corners (bottom 0-3, top 4-7) so the
+            // bar follows the 3D box edge instead of jumping on min_sx.
+            float left_bot_x = FLT_MAX, left_top_x = FLT_MAX;
+            float left_bot_y = max_sy, left_top_y = min_sy;
+            bool have_bot = false, have_top = false;
+            for (int i = 0; i < 4; i++) {
+                if (corner_visible[i] && sx[i] < left_bot_x) {
+                    left_bot_x = sx[i]; left_bot_y = sy[i]; have_bot = true;
+                }
+            }
+            for (int i = 4; i < 8; i++) {
+                if (corner_visible[i] && sx[i] < left_top_x) {
+                    left_top_x = sx[i]; left_top_y = sy[i]; have_top = true;
+                }
+            }
+            if (!have_bot) { left_bot_x = min_sx; left_bot_y = max_sy; }
+            if (!have_top) { left_top_x = min_sx; left_top_y = min_sy; }
+            float bh = left_bot_y - left_top_y;
+            if (bh < 2.0f) { left_top_y = left_bot_y - 2.0f; bh = 2.0f; left_top_x = left_bot_x; }
+            float fill_h = bh * hp;
+            float bx_bl = left_bot_x - bw - 5.0f;
+            float bx_tl = left_top_x - bw - 5.0f;
+            bool nearly_vertical = fabsf(bx_bl - bx_tl) < 2.0f;
+            if (nearly_vertical) {
+                float bx = (bx_bl + bx_tl) * 0.5f;
+                float fh = fill_h;
+                dl->AddRectFilled(ImVec2(bx - 1.5f, left_top_y - 1.5f), ImVec2(bx + bw + 1.5f, left_bot_y + 1.5f),
+                                  IM_COL32(0, 0, 0, a_mul(alpha, 0.65f)), 3.5f);
+                dl->AddRectFilled(ImVec2(bx, left_top_y), ImVec2(bx + bw, left_bot_y),
+                                  hstyle::with_a(IM_COL32(34, 36, 44, 255), a_mul(alpha, 0.90f)), 2.5f);
+                if (fh > 0.5f) {
+                    ImU32 fill = hstyle::lerp(IM_COL32(235, 74, 74, 255), c0, hp);
+                    dl->AddRectFilled(ImVec2(bx, left_bot_y - fh), ImVec2(bx + bw, left_bot_y),
+                                      hstyle::with_a(fill, alpha), 2.5f);
+                    dl->PushClipRect(ImVec2(bx, left_bot_y - fh), ImVec2(bx + bw, left_bot_y), true);
+                    dl->AddRectFilled(ImVec2(bx + 0.5f, left_bot_y - fh),
+                                      ImVec2(bx + bw - 0.5f, left_bot_y - fh + 3.0f),
+                                      IM_COL32(255, 255, 255, a_mul(alpha, 0.55f)), 2.0f);
+                    dl->PopClipRect();
+                }
+            } else {
+                // Slanted bar along the left edge (3D box).
+                unsigned white = hud_icons::white();
+                ImU32 dark = IM_COL32(20, 22, 28, a_mul(alpha, 0.92f));
                 ImU32 fill = hstyle::lerp(IM_COL32(235, 74, 74, 255), c0, hp);
-                dl->AddRectFilled(ImVec2(bx, max_sy - fh), ImVec2(bx + bw, max_sy),
-                                  hstyle::with_a(fill, alpha), 2.5f);
-                dl->PushClipRect(ImVec2(bx, max_sy - fh), ImVec2(bx + bw, max_sy), true);
-                dl->AddRectFilled(ImVec2(bx + 0.5f, max_sy - fh),
-                                  ImVec2(bx + bw - 0.5f, max_sy - fh + 3.0f),
-                                  IM_COL32(255, 255, 255, a_mul(alpha, 0.55f)), 2.0f);
-                dl->PopClipRect();
+                float fx0 = bx_bl, fy0 = left_bot_y;
+                float fx1 = bx_tl + (bx_bl - bx_tl) * hp, fy1 = left_bot_y - fill_h;
+                auto quad = [&](float ax, float ay, float bx, float by, float cx2, float cy2, float dx, float dy,
+                                ImU32 col) {
+                    if (white) {
+                        dl->PushTextureID((ImTextureID)(intptr_t)white);
+                        dl->PrimReserve(6, 4);
+                        dl->PrimQuadUV(ImVec2(ax, ay), ImVec2(bx, by), ImVec2(cx2, cy2), ImVec2(dx, dy),
+                                       ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), col);
+                        dl->PopTextureID();
+                    }
+                };
+                // dark backing full bar
+                quad(bx_bl, left_bot_y, bx_bl + bw, left_bot_y, bx_tl + bw, left_top_y, bx_tl, left_top_y, dark);
+                // fill from bottom up to hp
+                if (fill_h > 0.5f)
+                    quad(fx0, fy0, fx0 + bw, fy0, fx1 + bw, fy1, fx1, fy1, hstyle::with_a(fill, alpha));
+                // outline
+                dl->AddLine(ImVec2(bx_bl, left_bot_y), ImVec2(bx_tl, left_top_y),
+                            IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), 1.6f);
+                dl->AddLine(ImVec2(bx_bl + bw, left_bot_y), ImVec2(bx_tl + bw, left_top_y),
+                            IM_COL32(0, 0, 0, a_mul(alpha, 0.70f)), 1.6f);
+                if (fill_h > 0.5f) {
+                    dl->AddLine(ImVec2(fx0, fy0), ImVec2(fx1, fy1),
+                                IM_COL32(255, 255, 255, a_mul(alpha, 0.50f)), 1.4f);
+                }
             }
         }
         float plate_x = (min_sx + max_sx) * 0.5f;
-        float plate_bottom = min_sy - 7.0f;
+        float plate_bottom = min_sy - 16.0f;
         float plate_h = 0.0f;
         if (want_name && !entry.name.empty() && dist_plates <= 96.0f) {
             float phase = (float)((int)kv.first % 97) / 97.0f;
@@ -493,8 +563,8 @@ DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } vo
         if (want_item && !entry.items.empty() && dist_plates <= 96.0f) {
             // equipment row stacks above the name tag so nothing covers the box
             float tiles_top = plate_h > 0.0f
-                                  ? plate_bottom - plate_h - 7.0f
-                                  : min_sy - 6.0f - 19.0f;
+                                  ? plate_bottom - plate_h - 16.0f
+                                  : min_sy - 14.0f - 19.0f;
             draw_entity_item_tiles(dl, plate_x, tiles_top, entry.items, alpha, c0, c1);
         }
     }
@@ -576,13 +646,13 @@ DeleteLocalRef(p); env->DeleteLocalRef(world); env->DeleteLocalRef(player); } vo
         }
         for (const item_cand& c : cs) {
             float phase = (float)(c.id % 89) / 89.0f;
-            draw_item_plate(dl, c.sx, c.sy - 3.0f, c.e->name.c_str(),
+            draw_item_plate(dl, c.sx, c.sy - 3.0f, c.e->name.c_str(), c.e->tex,
                             c.e->icon_r, c.e->icon_g, c.e->icon_b,
                             c.alpha, s_c0, s_c1, phase);
         }
     }
 { std::lock_guard<std::mutex> lock(esp_mutex); long long stale_threshold = k_grace_us + k_fade_out_us; for (auto it = g_players.begin(); it != g_players.end(); ) { if (it->second.last_seen_us <= 0) { it = g_players.erase(it); continue; } if (ts - it->second.last_seen_us > stale_threshold) it = g_players.erase(it); else ++it; } for (auto it = g_items.begin(); it !=
 g_items.end(); ) { if (it->second.last_seen_us <= 0) { it = g_items.erase(it); continue; } if (ts - it->second.last_seen_us > stale_threshold) it = g_items.erase(it); else ++it; } for (auto& kv : pc) { auto it = g_players.find(kv.first); if (it == g_players.end()) g_players.emplace(kv.first, std::move(kv.second)); else for (int i = 0; i < 9; i++) it->second.smooth.current[i] = kv.second.smooth.current[i]; } for (auto& kv : ic) { auto it = g_items.find(kv.first); if (it == g_items.end()) g_items.emplace(kv.first, std::move(kv.second)); else for (int i = 0; i < 9; i++) it->second.smooth.current
-[i] = kv.second.smooth.current[i]; } } } void flaway::modules::esp::cleanup() { g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); g_scan_cache.clear(); { std::lock_guard<std::mutex> lock(esp_mutex); g_pickups.clear(); } if (g_last_world) { if (flaway::instance) { if (auto env = flaway::instance->get_env()) env->DeleteGlobalRef(g_last_world); } g_last_world = nullptr; } } std::unordered_map<int, esp_render_entry> flaway::modules::esp::snapshot_players() { std::lock_guard<std::mutex> lock(esp_mutex); return g_players; } esp_camera_data flaway::modules::esp::camera() { std::
+[i] = kv.second.smooth.current[i]; } } } void flaway::modules::esp::cleanup() { std::lock_guard<std::mutex> lock(esp_mutex); g_players.clear(); g_items.clear(); g_name_cache.clear(); g_item_name_cache.clear(); g_item_tex_cache.clear(); g_scan_cache.clear(); g_pickups.clear(); if (g_last_world) { if (flaway::instance) { if (auto env = flaway::instance->get_env()) env->DeleteGlobalRef(g_last_world); } g_last_world = nullptr; } } std::unordered_map<int, esp_render_entry> flaway::modules::esp::snapshot_players() { std::lock_guard<std::mutex> lock(esp_mutex); return g_players; } esp_camera_data flaway::modules::esp::camera() { std::
 lock_guard<std::mutex> lock(esp_mutex); return esp_cam; } bool flaway::modules::esp::snapshot_target(esp_render_entry& out) { std::lock_guard<std::mutex> lock(esp_mutex); for (auto& kv : g_players) { if (kv.second.is_target) { out = kv.second; return true; } } return false; } bool flaway::modules::esp::snapshot_entry(int id, esp_render_entry& out) { std::lock_guard<std::mutex> lock(esp_mutex); auto it = g_players.find(id); if (it == g_players.end()) return false; out = it->second; return true; } std::vector<esp_pickup_entry> flaway::modules::esp::pickups() { std::lock_guard<std::mutex> lock(
 esp_mutex); return std::vector<esp_pickup_entry>(g_pickups.begin(), g_pickups.end()); }

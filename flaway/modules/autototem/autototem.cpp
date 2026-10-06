@@ -307,10 +307,16 @@ void flaway::modules::autototem::swap_to_offhand_blatant(int slot)
 	// For main inventory items (9-39), use set_stack (client-side only - may appear as "ghost")
 	if (slot < 9)
 	{
-		// Select the slot containing the totem
+		// Select the slot containing the totem.
+		// Remember what the user had selected first: without this the hotbar
+		// selection is left on the (now empty) totem slot, a visible change to
+		// their hotbar the module never asked for.
 		jfieldID selected_slot_fid = env->GetFieldID(inventory_class, sdk::mappings::inventory_selected_slot_name, sdk::mappings::inventory_selected_slot_sig);
+		int prev_selected = -1;
 		if (selected_slot_fid)
 		{
+			prev_selected = env->GetIntField(inventory, selected_slot_fid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); prev_selected = -1; }
 			env->SetIntField(inventory, selected_slot_fid, slot);
 		}
 		if (env->ExceptionCheck()) env->ExceptionClear();
@@ -330,9 +336,20 @@ void flaway::modules::autototem::swap_to_offhand_blatant(int slot)
 			input.ki.dwFlags = 0;
 			SendInput(1, &input, sizeof(INPUT));
 			Sleep(5);
-			
+
 			input.ki.dwFlags = KEYEVENTF_KEYUP;
 			SendInput(1, &input, sizeof(INPUT));
+		}
+
+		// Put the user's hotbar selection back once the swap is done.
+		if (prev_selected >= 0 && prev_selected <= 8 && prev_selected != slot)
+		{
+			if (selected_slot_fid)
+			{
+				env->SetIntField(inventory, selected_slot_fid, prev_selected);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+			}
+			send_update_selected_slot_packet(prev_selected);
 		}
 	}
 	else
@@ -759,16 +776,17 @@ void flaway::modules::autototem::run()
 		return;
 	}
 	last_check_time = current_time;
-	
-	jobject player = sdk::instance->get_player();
-	if (!player) return;
-	
+
+	// env first: on the `!env` path we could not DeleteLocalRef(player) anyway.
 	auto env = flaway::instance->get_env();
 	if (!env)
 	{
 		return;
 	}
-	
+
+	jobject player = sdk::instance->get_player();
+	if (!player) return;
+
 	// Check if player already has totem in offhand
 	if (has_totem_in_offhand(player))
 	{

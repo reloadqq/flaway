@@ -199,7 +199,13 @@ const KbMod k_kb[] = {
     {"Chest Stealer", &globals::chest_stealer_enabled, &globals::chest_stealer_keybind},
 };
 
-std::vector<KbRow> kb_rows() {
+// hud_core runs two passes per frame (measure_all then draw), and both the
+// measure and draw pass call these row builders. row_damp() is stateful, so
+// without the per-frame cache the animation ran at ~2x the intended speed.
+static int                 s_kb_rows_frame = -1;
+static std::vector<KbRow>  s_kb_rows_cache;
+
+static std::vector<KbRow> kb_rows_damped() {
     static std::unordered_map<std::string, float> anim;
     std::vector<KbRow> rows;
     for (auto& kb : k_kb) {
@@ -210,6 +216,14 @@ std::vector<KbRow> kb_rows() {
         rows.push_back({kb.name, kb.key ? *kb.key : 0, a});
     }
     return rows;
+}
+
+std::vector<KbRow> kb_rows() {
+    const int frame = (int)ImGui::GetFrameCount();
+    if (frame == s_kb_rows_frame) return s_kb_rows_cache;
+    s_kb_rows_frame = frame;
+    s_kb_rows_cache = kb_rows_damped();
+    return s_kb_rows_cache;
 }
 
 ImVec2 m_keybinds(Ctx& c) {
@@ -631,10 +645,13 @@ ImVec2 m_poison(Ctx& c) {
     ImFont* f = hstyle::font();
     if (!f) return ImVec2(0, 0);
     float s = c.s;
-    const char* label = "Poison \xE2\x98\xA0";
+    // No ☠ glyph — Inter/Monocraft lack U+2620; skull is drawn with rects.
+    const char* label = "Poison";
     float fs = 12.0f * s;
     float px = 9.0f * s;
-    return ImVec2(px + 8.0f * s + tsize(f, fs, label).x + px, fs + 13.0f * s);
+    float skull_w = 10.0f * s, gap = 5.0f * s;
+    return ImVec2(px + 8.0f * s + skull_w + gap + tsize(f, fs, label).x + px,
+                  fs + 13.0f * s);
 }
 
 void d_poison(Ctx& c, const ImVec2& size) {
@@ -659,10 +676,28 @@ void d_poison(Ctx& c, const ImVec2& size) {
     ImVec2 dc(c.r0.x + px + dr, c.r0.y + size.y * 0.5f);
     c.dl->AddCircleFilled(dc, dr, hstyle::with_a(green, (int)(c.alpha * 255)), 16);
     c.dl->AddCircle(dc, dr + 3.5f * s, hstyle::with_a(green, (int)(c.alpha * 70)), 16, 1.2f);
+
+    // Skull icon (rects): head + eyes + jaw
+    float sk = 10.0f * s;
+    float skx = c.r0.x + px + 8.0f * s + dr + 4.0f * s;
+    float sky = c.r0.y + (size.y - sk) * 0.5f;
+    ImU32 skc = hstyle::with_a(green, (int)(c.alpha * 230));
+    c.dl->AddRectFilled(ImVec2(skx, sky), ImVec2(skx + sk, sky + sk * 0.72f), skc, 2.2f * s);
+    float ew = 2.0f * s, eh = 2.2f * s;
+    c.dl->AddRectFilled(ImVec2(skx + sk * 0.18f, sky + sk * 0.22f),
+                        ImVec2(skx + sk * 0.18f + ew, sky + sk * 0.22f + eh),
+                        IM_COL32(10, 14, 16, (int)(c.alpha * 255)), 0.4f * s);
+    c.dl->AddRectFilled(ImVec2(skx + sk * 0.58f, sky + sk * 0.22f),
+                        ImVec2(skx + sk * 0.58f + ew, sky + sk * 0.22f + eh),
+                        IM_COL32(10, 14, 16, (int)(c.alpha * 255)), 0.4f * s);
+    c.dl->AddRectFilled(ImVec2(skx + sk * 0.28f, sky + sk * 0.70f),
+                        ImVec2(skx + sk * 0.72f, sky + sk),
+                        hstyle::with_a(green, (int)(c.alpha * 180)), 1.0f * s);
+
     float fs = 12.0f * s;
     draw_text(c.dl, f, fs,
-              ImVec2(c.r0.x + px + 8.0f * s + dr, c.r0.y + (size.y - fs) * 0.5f),
-              hstyle::with_a(green, (int)(c.alpha * 245)), "Poison \xE2\x98\xA0");
+              ImVec2(skx + sk + 5.0f * s, c.r0.y + (size.y - fs) * 0.5f),
+              hstyle::with_a(green, (int)(c.alpha * 245)), "Poison");
 }
 
 // ===========================================================================
@@ -701,7 +736,10 @@ struct ArRow {
     float a, w;
 };
 
-std::vector<ArRow> array_rows(Ctx& c) {
+static int                 s_ar_rows_frame = -1;
+static std::vector<ArRow>  s_ar_rows_cache;
+
+static std::vector<ArRow> array_rows_damped(Ctx& c) {
     static std::unordered_map<std::string, float> anim;
     std::vector<ArRow> out;
     ImFont* f = hstyle::font();
@@ -721,6 +759,14 @@ std::vector<ArRow> array_rows(Ctx& c) {
         out.push_back({sample, 0.6f, tsize(f, fs, sample).x + px * 2.0f});
     }
     return out;
+}
+
+std::vector<ArRow> array_rows(Ctx& c) {
+    const int frame = (int)ImGui::GetFrameCount();
+    if (frame == s_ar_rows_frame) return s_ar_rows_cache;
+    s_ar_rows_frame = frame;
+    s_ar_rows_cache = array_rows_damped(c);
+    return s_ar_rows_cache;
 }
 
 ImVec2 m_arraylist(Ctx& c) {

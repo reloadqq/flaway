@@ -28,6 +28,7 @@
 #include "chest_stealer/chest_stealer.h"
 #include "autosprint/autosprint.h"
 #include "fullbright/fullbright.h"
+#include "fog/fog.h"
 #include "../../platform/linux/x11_helper.h"
 #include <sdk/minecraft/minecraft.h>
 
@@ -155,6 +156,7 @@ namespace flaway
 			chest_stealer::run();
 			autosprint::run();
 			fullbright::run();
+			fog::run();
 			base_finder::run();
 		}
 

@@ -29,6 +29,7 @@ typedef void   (*PFNGLLINKPROGRAMPROC)(unsigned);
 typedef void   (*PFNGLGETPROGRAMIVPROC)(unsigned, unsigned, int*);
 typedef void   (*PFNGLGETPROGRAMINFOLOGPROC)(unsigned, int, int*, char*);
 typedef void   (*PFNGLGETSHADERINFOLOGPROC)(unsigned, int, int*, char*);
+typedef void   (*PFNGLBINDATTRIBLOCATIONPROC)(unsigned, unsigned, const char*);
 typedef int    (*PFNGLGETUNIFORMLOCATIONPROC)(unsigned, const char*);
 typedef void   (*PFNGLUNIFORM1IPROC)(unsigned, int);
 typedef void   (*PFNGLUNIFORM1FPROC)(unsigned, float);
@@ -85,6 +86,7 @@ static PFNGLLINKPROGRAMPROC _glLinkProgram = nullptr;
 static PFNGLGETPROGRAMIVPROC _glGetProgramiv = nullptr;
 static PFNGLGETPROGRAMINFOLOGPROC _glGetProgramInfoLog = nullptr;
 static PFNGLGETSHADERINFOLOGPROC _glGetShaderInfoLog = nullptr;
+static PFNGLBINDATTRIBLOCATIONPROC _glBindAttribLocation = nullptr;
 static PFNGLGETUNIFORMLOCATIONPROC _glGetUniformLocation = nullptr;
 static PFNGLUNIFORM1IPROC _glUniform1i = nullptr;
 static PFNGLUNIFORM1FPROC _glUniform1f = nullptr;
@@ -193,6 +195,7 @@ static bool load_gl() {
     _glGetProgramiv = (PFNGLGETPROGRAMIVPROC)dlsym(RTLD_DEFAULT, "glGetProgramiv");
     _glGetProgramInfoLog = (PFNGLGETPROGRAMINFOLOGPROC)dlsym(RTLD_DEFAULT, "glGetProgramInfoLog");
     _glGetShaderInfoLog = (PFNGLGETSHADERINFOLOGPROC)dlsym(RTLD_DEFAULT, "glGetShaderInfoLog");
+    _glBindAttribLocation = (PFNGLBINDATTRIBLOCATIONPROC)dlsym(RTLD_DEFAULT, "glBindAttribLocation");
     _glGetUniformLocation = (PFNGLGETUNIFORMLOCATIONPROC)dlsym(RTLD_DEFAULT, "glGetUniformLocation");
     _glUniform1i = (PFNGLUNIFORM1IPROC)dlsym(RTLD_DEFAULT, "glUniform1i");
     _glUniform1f = (PFNGLUNIFORM1FPROC)dlsym(RTLD_DEFAULT, "glUniform1f");
@@ -229,14 +232,19 @@ static bool load_gl() {
         && _glCompileShader && _glGetShaderiv && _glAttachShader
         && _glLinkProgram && _glGetProgramiv && _glDeleteShader
         && _glDeleteProgram && _glUseProgram && _glGetUniformLocation
-        && _glUniform1i && _glUniform2f && _glActiveTexture
+        && _glUniform1i && _glUniform1f && _glUniform2f && _glActiveTexture
         && _glBindTexture && _glGenTextures && _glDeleteTextures
         && _glTexImage2D && _glTexParameteri && _glGetIntegerv
-        && _glGenVertexArrays && _glBindVertexArray && _glGenBuffers
-        && _glBindBuffer && _glBufferData && _glEnableVertexAttribArray
+        && _glPixelStorei && _glReadPixels
+        && _glGenVertexArrays && _glBindVertexArray && _glDeleteVertexArrays
+        && _glGenBuffers && _glBindBuffer && _glBufferData && _glDeleteBuffers
+        && _glEnableVertexAttribArray
         && _glVertexAttribPointer && _glDrawArrays && _glDisable
         && _glEnable && _glViewport && _glScissor && _glBlendFunc
-        && _glIsEnabled
+        && _glIsEnabled && _glBindAttribLocation
+        && _glGenRenderbuffers && _glBindRenderbuffer
+        && _glRenderbufferStorage && _glFramebufferRenderbuffer
+        && _glDeleteRenderbuffers
         && _glBlitFramebuffer;
     return loaded;
 }
@@ -349,6 +357,12 @@ static unsigned create_program(const char* vert_src, const char* frag_src) {
     unsigned prog = _glCreateProgram();
     _glAttachShader(prog, vs);
     _glAttachShader(prog, fs);
+    // GLSL 1.50 has no layout(location=...) on vertex inputs, so the linker
+    // picks locations freely and the VAO's hard-wired 0/1 would read unbound
+    // attributes on a non-coincidental driver (black glass-card backdrop).
+    // Bind BEFORE linking — that is the only point at which it takes effect.
+    _glBindAttribLocation(prog, 0, "aPos");
+    _glBindAttribLocation(prog, 1, "aTexCoord");
     _glLinkProgram(prog);
     int ok = 0;
     _glGetProgramiv(prog, GL_LINK_STATUS, &ok);
@@ -478,7 +492,11 @@ void glass_blur::resize(int w, int h) {
     int bh = h / BLUR_SCALE;
     if (bw < 1) bw = 1;
     if (bh < 1) bh = 1;
-    if (bw == s_blur_tex_w && bh == s_blur_tex_h) return;
+    // Also compare the full window size: a 1 px resize that maps to the same
+    // blur dims (1920->1921, both /4 == 480) must still update s_width/s_height,
+    // otherwise capture_framebuffer() re-enters resize() every frame.
+    if (bw == s_blur_tex_w && bh == s_blur_tex_h &&
+        w  == s_width       && h  == s_height) return;
 
     if (s_src_tex) { _glDeleteTextures(1, &s_src_tex); s_src_tex = 0; }
     if (s_src_fbo) { _glDeleteFramebuffers(1, &s_src_fbo); s_src_fbo = 0; }
@@ -487,14 +505,34 @@ void glass_blur::resize(int w, int h) {
     if (s_pong_tex) { _glDeleteTextures(1, &s_pong_tex); s_pong_tex = 0; }
     if (s_pong_fbo) { _glDeleteFramebuffers(1, &s_pong_fbo); s_pong_fbo = 0; }
 
+    // Allocate FIRST, commit the new dimensions only on success. If any
+    // create_tex_fbo() fails (transient OOM), committing the dims anyway would
+    // make the early return above fire on every subsequent call and blur would
+    // stay broken for the rest of the session.
+    unsigned new_src  = create_tex_fbo(w,  h,  &s_src_fbo);
+    unsigned new_ping = create_tex_fbo(bw, bh, &s_ping_fbo);
+    unsigned new_pong = create_tex_fbo(bw, bh, &s_pong_fbo);
+
+    if (!new_src || !new_ping || !new_pong) {
+        if (new_src)  _glDeleteTextures(1, &new_src);
+        if (new_ping) _glDeleteTextures(1, &new_ping);
+        if (new_pong) _glDeleteTextures(1, &new_pong);
+        if (s_src_fbo)  _glDeleteFramebuffers(1, &s_src_fbo);
+        if (s_ping_fbo) _glDeleteFramebuffers(1, &s_ping_fbo);
+        if (s_pong_fbo) _glDeleteFramebuffers(1, &s_pong_fbo);
+        s_src_fbo = s_ping_fbo = s_pong_fbo = 0;
+        // Leave s_width/s_height/s_blur_tex_* untouched so the next call retries.
+        fprintf(stderr, "[blur] resize %dx%d -> blur %dx%d failed to allocate\n", w, h, bw, bh);
+        return;
+    }
+
+    s_src_tex  = new_src;
+    s_ping_tex = new_ping;
+    s_pong_tex = new_pong;
     s_width = w;
     s_height = h;
     s_blur_tex_w = bw;
     s_blur_tex_h = bh;
-
-    s_src_tex = create_tex_fbo(w, h, &s_src_fbo);
-    s_ping_tex = create_tex_fbo(bw, bh, &s_ping_fbo);
-    s_pong_tex = create_tex_fbo(bw, bh, &s_pong_fbo);
 
     fprintf(stderr, "[blur] resized %dx%d -> blur %dx%d\n", w, h, bw, bh);
 }

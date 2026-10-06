@@ -279,6 +279,16 @@ unsigned cache_add(unsigned tex) {
 
 } // namespace
 
+unsigned white() {
+    static unsigned tex = 0;
+    static bool done = false;
+    if (done) return tex;
+    done = true;
+    unsigned char px[4] = {255, 255, 255, 255};
+    tex = cache_add(upload_rgba(px, 1, 1));
+    return tex;
+}
+
 unsigned item(const std::string& suffix) {
     if (suffix.empty()) return 0;
     auto it = g_item_tex.find(suffix);
@@ -329,6 +339,38 @@ unsigned skin(const std::string& hash) {
     snprintf(path, sizeof(path), "%s/.minecraft/assets/skins/%c%c/%s", home,
              hash[0], hash[1], hash.c_str());
     FILE* f = fopen(path, "rb");
+    if (!f) {
+        // Not in the client assets cache — fetch from Mojang, then retry.
+        char url[320], tmp[768], cmd[2048];
+        snprintf(url, sizeof(url), "https://textures.minecraft.net/texture/%s", hash.c_str());
+        snprintf(tmp, sizeof(tmp), "%s/.minecraft/flaway_skin_%s", home, hash.c_str());
+        snprintf(cmd, sizeof(cmd),
+                 "curl -fsSL --max-time 8 '%s' -o '%s' 2>/dev/null",
+                 url, tmp);
+        int rc = system(cmd);
+        if (rc == 0) f = fopen(tmp, "rb");
+        if (!f) {
+            // Known Mojang default skins (offline / missing profile textures).
+            static const char* k_defaults[] = {
+                "c9037d53d60811835e8b1a1b0e0e0e0e",
+                "86df3d8080d90d5593519d3b093e9a2059a671e3",
+                "e3d5360e0d2f1b80e2c8d3c5",
+            };
+            for (const char* d : k_defaults) {
+                if (strcmp(d, hash.c_str()) == 0) continue;
+                char durl[320], dtmp[768], dcmd[2048];
+                snprintf(durl, sizeof(durl), "https://textures.minecraft.net/texture/%s", d);
+                snprintf(dtmp, sizeof(dtmp), "%s/.minecraft/flaway_skin_%s", home, d);
+                snprintf(dcmd, sizeof(dcmd),
+                         "curl -fsSL --max-time 5 '%s' -o '%s' 2>/dev/null",
+                         durl, dtmp);
+                if (system(dcmd) == 0) {
+                    f = fopen(dtmp, "rb");
+                    if (f) break;
+                }
+            }
+        }
+    }
     if (!f) { g_skin_tex[hash] = 0; return 0; }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);

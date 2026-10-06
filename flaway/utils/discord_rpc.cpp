@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cerrno>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -583,9 +584,21 @@ namespace
 		g_worker_quit.store(true);
 		if (g_wake_wr >= 0)
 		{
+			// The worker close()s its read end the moment it observes
+			// g_worker_quit (run_worker). If we are preempted between the store
+			// above and this write, the write hits a reader-less pipe and raises
+			// SIGPIPE — which HotSpot does NOT ignore (SigIgn/SigCgt bit 12
+			// clear) and write() has no MSG_NOSIGNAL, so the default action
+			// kills the game. Blocking SIGPIPE for this thread turns it into a
+			// plain EPIPE return instead of a process-wide policy change.
+			sigset_t block, old;
+			sigemptyset(&block);
+			sigaddset(&block, SIGPIPE);
+			pthread_sigmask(SIG_BLOCK, &block, &old);
 			char b = 1;
 			ssize_t ignored = write(g_wake_wr, &b, 1);
 			(void)ignored;
+			pthread_sigmask(SIG_SETMASK, &old, nullptr);
 		}
 		pthread_join(g_thread, nullptr);
 		g_running = false;

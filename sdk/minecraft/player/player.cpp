@@ -46,14 +46,13 @@ jobject player_client::get_player()
 
 jobject player_client::get_capabilities()
 {
+	auto env = flaway::instance ? flaway::instance->get_env() : nullptr;
+	if (!env) return nullptr;
+
+	// Resolve env BEFORE creating any JNI ref: the !env path below would
+	// otherwise abandon the local ref returned by get_player().
 	jobject current_player = get_player();
 	if (!current_player) return nullptr;
-	
-	auto env = flaway::instance->get_env();
-	if (!env)
-	{
-		return nullptr;
-	}
 
 	jclass player_class = env->GetObjectClass(current_player);
 	if (!player_class)
@@ -81,14 +80,14 @@ jobject player_client::get_capabilities()
 
 void player_client::set_flying(bool state)
 {
+	auto env = flaway::instance ? flaway::instance->get_env() : nullptr;
+	if (!env) return;
+
 	jobject capabilities = get_capabilities();
 	if (!capabilities)
-	{ 
+	{
 		return;
 	}
-		
-	auto env = flaway::instance->get_env();
-	if (!env) return;
 
 	jclass capabilities_class = env->GetObjectClass(capabilities);
 	if (!capabilities_class)
@@ -110,11 +109,11 @@ void player_client::set_flying(bool state)
 
 void player_client::set_sprinting(bool state)
 {
+	auto env = flaway::instance ? flaway::instance->get_env() : nullptr;
+	if (!env) return;
+
 	jobject current_player = get_player();
 	if (!current_player) return;
-	
-	auto env = flaway::instance->get_env();
-	if (!env) return;
 
 	jclass player_class = env->GetObjectClass(current_player);
 	if (!player_class)
@@ -137,11 +136,11 @@ void player_client::set_sprinting(bool state)
 
 float player_client::get_attack_cooldown_progress(float base_time)
 {
+	auto env = flaway::instance ? flaway::instance->get_env() : nullptr;
+	if (!env) return 0.0f;
+
 	jobject current_player = get_player();
 	if (!current_player) return 0.0f;
-	
-	auto env = flaway::instance->get_env();
-	if (!env) return 0.0f;
 
 	jclass player_class = sdk::classloader::find_class(env, sdk::mappings::player_entity_class_sig);
 	if (!player_class)

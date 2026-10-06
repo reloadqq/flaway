@@ -1102,14 +1102,18 @@ namespace
 				unpack_pos(k, x, y, z);
 				out.push_back({x, y, z});
 			}
+			size_t cave_count = 0;
 			{
 				std::lock_guard<std::mutex> lock(g_mutex);
 				g_cave_blocks = std::move(out);
+				// Capture under the lock: run() clears these containers under
+				// the same mutex, so a bare .size() outside would race.
+				cave_count = g_cave_blocks.size();
 			}
 			cs.active = false;
 			cs.finished_us = now_us();
 			if (globals::debug_logging_enabled)
-				logger::log("[base_finder] cave scan done: " + std::to_string(g_cave_blocks.size()) + " blocks");
+				logger::log("[base_finder] cave scan done: " + std::to_string(cave_count) + " blocks");
 		}
 	}
 
@@ -1190,16 +1194,18 @@ namespace
 				unpack_pos(k, x, y, z);
 				out.push_back({x, y, z});
 			}
+			size_t solid_count = 0;
 			{
 				std::lock_guard<std::mutex> lock(g_mutex);
 				g_solid_blocks = out;
 				if (globals::base_finder_click) g_click_queue = out;
 				else g_click_queue.clear();
+				solid_count = g_solid_blocks.size();
 			}
 			bs.active = false;
 			bs.finished_us = now_us();
 			if (globals::debug_logging_enabled)
-				logger::log("[base_finder] bypass scan done: " + std::to_string(g_solid_blocks.size()) + " blocks");
+				logger::log("[base_finder] bypass scan done: " + std::to_string(solid_count) + " blocks");
 		}
 	}
 
@@ -1373,8 +1379,11 @@ namespace
 			env->DeleteLocalRef(pos);
 			if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
 			if (!bhr) break;
-			env->CallObjectMethod(im, g_jni.interact_block, player, hand, bhr);
+			// interactBlock returns an ActionResult - delete it, otherwise the
+			// local-ref table fills up on this never-detached thread.
+			jobject interact_res = env->CallObjectMethod(im, g_jni.interact_block, player, hand, bhr);
 			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (interact_res) env->DeleteLocalRef(interact_res);
 			env->DeleteLocalRef(bhr);
 			clicks++;
 		}

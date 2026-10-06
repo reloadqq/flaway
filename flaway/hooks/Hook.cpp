@@ -81,8 +81,11 @@ namespace Hook {
     float get_game_fps() { return linux_hook::get_game_fps(); }
     unsigned long get_window() { return x11_helper::get_window_handle(); }
     bool wait_render_idle() { return linux_hook::wait_render_idle(); }
-    void wait_gui_shutdown() { linux_hook::wait_gui_shutdown(); }
-    void release_gui_resources() { linux_hook::release_gui_resources(); }
+    void wait_gui_shutdown() { return linux_hook::wait_gui_shutdown(); }
+    void release_gui_resources() { return linux_hook::release_gui_resources(); }
+    // Hook.h declares Hook::reset_fbo_cache() but nothing defined it, so the
+    // first future caller would fail at link time with "undefined reference".
+    void reset_fbo_cache() { linux_hook::reset_fbo_cache(); }
 }
 
 namespace linux_hook {
@@ -532,10 +535,14 @@ namespace linux_hook {
                 logger::log("[flaway] re-inject requested: re-arming cheat");
             }
             if (o_swap_buffers) {
-                if (s_hook_type == HOOK_GLX)
-                    o_swap_buffers(win, g_last_drawable);
-                else
+                // GLFW's glfwSwapBuffers takes one argument, so a second is
+                // ignored. GLX and EGL both consume the second one: the real
+                // GLXDrawable / EGLSurface. Passing 0 on the EGL path yields
+                // EGL_BAD_SURFACE every frame and nothing is ever presented.
+                if (s_hook_type == HOOK_GLFW)
                     o_swap_buffers(win, 0);
+                else
+                    o_swap_buffers(win, g_last_drawable);
             }
             return;
         }
@@ -583,10 +590,12 @@ namespace linux_hook {
         (void)overlay_rendered;
 
         if (o_swap_buffers) {
-            if (s_hook_type == HOOK_GLX)
-                o_swap_buffers(win, g_last_drawable);
-            else
+            // See the matching block above: GLX AND EGL both need the real
+            // drawable/surface, not 0.
+            if (s_hook_type == HOOK_GLFW)
                 o_swap_buffers(win, 0);
+            else
+                o_swap_buffers(win, g_last_drawable);
         }
     }
 

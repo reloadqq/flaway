@@ -583,14 +583,19 @@ void flaway::modules::backtrack::draw_indicators()
 					{(float)(real_x + player.min_x - player.x), (float)(real_y + player.max_y - player.y), (float)(real_z + player.max_z - player.z)}
 				};
 
-				// Validate corners
+				// Validate corners. NOTE: a `continue` inside this inner loop
+				// would only skip to the next corner - it must abort the whole
+				// player, which is what the flag below does.
+				bool corners_ok = true;
 				for (int i = 0; i < 8; i++)
 				{
 					if (!std::isfinite(corners[i][0]) || !std::isfinite(corners[i][1]) || !std::isfinite(corners[i][2]))
 					{
-						continue; // Skip this player if corners are invalid
+						corners_ok = false;
+						break;
 					}
 				}
+				if (!corners_ok) continue; // Skip this player if corners are invalid
 
 				// Project corners to screen
 				float screen_x[8], screen_y[8];

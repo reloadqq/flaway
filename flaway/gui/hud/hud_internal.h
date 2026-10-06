@@ -159,6 +159,7 @@ namespace hud_icons {
 unsigned item(const std::string& suffix);      // item/<suffix>.png or block/<suffix>.png
 unsigned skin(const std::string& hash);        // full 64x64 skin texture
 unsigned png(const unsigned char* data, size_t len);  // embedded PNG byte array
+unsigned white();                              // 1x1 white texture (solid-fill quads)
 void shutdown();
 
 } // namespace hud_icons

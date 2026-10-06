@@ -152,8 +152,11 @@ void flaway::modules::triggerbot::run()
 	if (!globals::triggerbot_enabled)
 	{
 		last_attack_ms = 0;
-		s_sprint_active = false;
-		tb_tick_sprint_reset();
+		// Re-press W NOW while s_sprint_active is still set. Clearing the flag
+		// first (as this used to do) made tb_tick_sprint_reset() early-return,
+		// so the injected key-up was never undone and the player stayed unable
+		// to walk forward.
+		if (s_sprint_active) { tb_send_key('W', true); s_sprint_active = false; }
 		return;
 	}
 
@@ -170,8 +173,11 @@ void flaway::modules::triggerbot::run()
 	auto env = flaway::instance->get_env();
 	if (!env) return;
 
+	// Do NOT clear s_sprint_active here: tb_tick_sprint_reset() (called above
+	// every frame) re-presses W once the 60 ms window elapses, and it refuses to
+	// act while the flag is false.
 	jobject target = sdk::instance->get_crosshair_target();
-	if (!target) { last_attack_ms = 0; s_sprint_active = false; return; }
+	if (!target) { last_attack_ms = 0; return; }
 
 	jclass entity_hit_cls = sdk::classloader::find_class(env,
 		sdk::mappings::entity_hit_result_class_sig);

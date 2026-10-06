@@ -1,6 +1,9 @@
 #include "ah_utils.h"
-#include "../../flaway.h"
-#include "../../utils/logger.h"
+// These two were written as if the file lived in flaway/modules/<x>/ :
+// from flaway/utils/ they resolved to <repo>/flaway.h and <repo>/utils/logger.h,
+// neither of which exists, so the TU could not be compiled at all.
+#include "../flaway.h"
+#include "logger.h"
 #include <sdk/minecraft/minecraft.h>
 #include <sdk/mappings/mappings.hpp>
 #include <sdk/classloader.h>
@@ -409,7 +412,10 @@ namespace flaway
 				// Skip spaces, then check for the coin symbol.
 				size_t k = next;
 				while (k < text.size() && text[k] == ' ') k++;
-				if (k < text.size() && text[k] == '\xC2\xA4') // '¤' in UTF-8
+				// '¤' is U+00A4 = C2 A4 in UTF-8. '\xC2\xA4' is a multi-char
+				// constant (= 49828) and never equals a sign-extended char.
+				if (k + 1 < text.size() &&
+				    (unsigned char)text[k] == 0xC2 && (unsigned char)text[k + 1] == 0xA4)
 					return value;
 				i = next;
 			}
@@ -560,7 +566,7 @@ namespace flaway
 								// money marker; take the largest digit run.
 								std::string lower = s;
 								for (auto& c : lower) c = (char)std::tolower((unsigned char)c);
-								if (s.find('\xC2\xA4') != std::string::npos ||
+								if (s.find("\xC2\xA4") != std::string::npos ||
 									lower.find("coin") != std::string::npos ||
 									lower.find("монет") != std::string::npos ||
 									lower.find("баланс") != std::string::npos)
@@ -604,9 +610,10 @@ namespace flaway
 			jmethodID values = env->GetStaticMethodID(action_class, "values",
 				("()[L" + std::string(k_slot_action_type_class_sig) + ";").c_str());
 			if (env->ExceptionCheck()) env->ExceptionClear();
-			env->DeleteLocalRef(action_class);
-			if (!values) return nullptr;
+			// Delete only AFTER the static call: the local ref is live until then.
+			if (!values) { env->DeleteLocalRef(action_class); return nullptr; }
 			jobjectArray arr = (jobjectArray)env->CallStaticObjectMethod(action_class, values);
+			env->DeleteLocalRef(action_class);
 			if (env->ExceptionCheck()) { env->ExceptionClear(); return nullptr; }
 			if (!arr) return nullptr;
 			jsize len = env->GetArrayLength(arr);

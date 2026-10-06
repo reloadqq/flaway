@@ -75,10 +75,14 @@ namespace sdk
 					const char* nameC = env->GetStringUTFChars(nameStr, nullptr);
 					if (nameC)
 					{
+						// NOTE: do NOT match the bare "ClassLoader" substring —
+						// that would accept AppClassLoader / PlatformClassLoader
+						// etc. and short-circuit test_loader(), after which the
+						// thread-scan fallback may adopt a non-game loader and
+						// every find_class() silently returns null.
 						if (strstr(nameC, "KnotClassLoader") ||
 							strstr(nameC, "TransformingClassLoader") ||
-							strstr(nameC, "LaunchClassLoader") ||
-							strstr(nameC, "ClassLoader"))
+							strstr(nameC, "LaunchClassLoader"))
 						{
 							ok = true;
 						}

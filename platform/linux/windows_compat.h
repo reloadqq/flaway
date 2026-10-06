@@ -25,7 +25,9 @@ typedef unsigned short WORD;
 typedef int BOOL;
 typedef unsigned char BYTE;
 typedef unsigned int UINT;
-typedef long LONG;
+// Windows LONG is ALWAYS 32-bit. On LP64 a C `long` is 64-bit, which silently
+// doubles the size of every struct that embeds it (POINT/RECT/MOUSEINPUT).
+typedef int32_t LONG;
 typedef void* HANDLE;
 typedef void* HMODULE;
 typedef void* HINSTANCE;
@@ -378,11 +380,13 @@ typedef struct { LONG left, top, right, bottom; } RECT;
 #define MK_XBUTTON2     0x0040
 
 // Input Structures
+// Field order matches the real Win32 MOUSEINPUT; positional/memcpy-based
+// construction would otherwise silently swap dx/dy with the flags.
 typedef struct {
-    DWORD dwFlags;
-    DWORD dx;
-    DWORD dy;
+    LONG dx;
+    LONG dy;
     DWORD mouseData;
+    DWORD dwFlags;
     DWORD dwExtraInfo;
 } MOUSEINPUT;
 
@@ -530,7 +534,13 @@ inline BOOL ClientToScreen(HWND, POINT* lpPoint) { return lpPoint ? (lpPoint->x+
 inline BOOL ScreenToClient(HWND, POINT* lpPoint) { return lpPoint ? TRUE : FALSE; }
 inline BOOL GetClientRect(HWND, RECT* lpRect) {
     if (!lpRect) return FALSE;
-    lpRect->left = 0; lpRect->top = 0; lpRect->right = 1920; lpRect->bottom = 1080;
+    // Real window size: the hardcoded 1920x1080 put every slot/row computation
+    // (autototem) on the wrong rectangle at any other resolution.
+    int w = 0, h = 0;
+    x11_helper::get_window_dimensions(&w, &h);
+    lpRect->left = 0; lpRect->top = 0;
+    lpRect->right  = w > 0 ? w : 1920;
+    lpRect->bottom = h > 0 ? h : 1080;
     return TRUE;
 }
 inline BOOL GetCursorPos(POINT* lpPoint) {
@@ -600,12 +610,12 @@ inline void mouse_event(DWORD dwFlags, DWORD dx, DWORD dy, DWORD dwData, ULONG_P
     if (dwFlags & MOUSEEVENTF_MIDDLEUP) x11_helper::send_mouse_click(0x04, false);
 }
 inline void RtlMoveMemory(void* dest, const void* src, size_t len) { memmove(dest, src, len); }
-inline HMODULE GetModuleHandleA(const char*) { return nullptr; }
-inline HANDLE CreateThread(void*, size_t, void* (*)(void*), void*, DWORD, DWORD*) { return nullptr; }
+// GetModuleHandleA / CreateThread / GetProcAddress intentionally NOT declared:
+// they had zero call sites and returned nullptr — a landmine for anyone who
+// later links against them expecting real behaviour.
 inline void WaitForSingleObject(HANDLE, DWORD) {}
 inline void CloseHandle(HANDLE) {}
 inline void DisableThreadLibraryCalls(HMODULE) {}
-inline void* GetProcAddress(HMODULE, const char*) { return nullptr; }
 inline LRESULT CallWindowProcA(void*, HWND, UINT, WPARAM, LPARAM) { return 0; }
 inline LRESULT PostMessageA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) {
     (void)hWnd;

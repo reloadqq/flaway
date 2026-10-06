@@ -233,6 +233,12 @@ namespace globals
     extern int fullbright_keybind;
     extern double fullbright_gamma;
 
+    // Fog visual (screen-space overlay)
+    extern bool fog_enabled;
+    extern int fog_mode;          // 0 = vignette, 1 = full, 2 = bottom
+    extern float fog_color[4];
+    extern float fog_strength;    // 0..100
+
     // HUD
     extern bool hud_watermark_enabled;
     extern bool hud_target_enabled;

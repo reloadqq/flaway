@@ -10,9 +10,12 @@ VULKAN_INC = third_party/vulkan_headers
 # addr2line-able, but full -g makes GUI.cpp peak at ~580 MB and OOMs the box.
 DEBUGFLAGS = $(if $(filter 1,$(DEBUG)),-g,-g1)
 CXXFLAGS = -std=c++20 -Wall -O2 -fPIC -fvisibility=hidden $(DEBUGFLAGS) -fno-omit-frame-pointer \
+           -include flaway/utils/no_log.h \
            -I. -Iutils -Iutils/imgui -Iutils/jnihook-master/include \
            -Isdk -I$(JAVA_INC) -I$(JAVA_INC)/linux -I$(VULKAN_INC) \
            -DNDEBUG -D_FLAWAY_EXPORTS
+# Header dependency tracking: editing a header rebuilds the .o's that include it
+DEPFLAGS = -MMD -MP
 
 # Bounded parallelism: bare `make -j` means UNLIMITED jobs in GNU make, i.e.
 # one compiler per source file, and GUI.cpp alone needs ~500 MB. The default
@@ -30,6 +33,7 @@ SRCS = \
     flaway/config/config.cpp \
     flaway/hooks/Hook.cpp \
     flaway/gui/GUI.cpp \
+    flaway/gui/vk_context.cpp \
     flaway/gui/glass_blur.cpp \
     flaway/gui/hud/hud_core.cpp \
     flaway/gui/hud/hud_data.cpp \
@@ -37,6 +41,7 @@ SRCS = \
     flaway/gui/hud/hud_icons.cpp \
     flaway/gui/hud/hud_fx.cpp \
     flaway/utils/logger.cpp \
+    flaway/utils/ah_utils.cpp \
     flaway/utils/rlog.cpp \
     flaway/utils/chat_notify.cpp \
     flaway/utils/discord_rpc.cpp \
@@ -67,6 +72,7 @@ SRCS = \
     flaway/modules/chest_stealer/chest_stealer.cpp \
     flaway/modules/autosprint/autosprint.cpp \
     flaway/modules/fullbright/fullbright.cpp \
+    flaway/modules/fog/fog.cpp \
     flaway/modules/friend_manager/friend_manager.cpp \
     flaway/modules/chat_command/chat_command.cpp \
     flaway/utils/crash_dump.cpp
@@ -102,6 +108,7 @@ JNIHOOK_SRCS = \
 
 ALL_SRCS = $(SRCS) $(LINUX_SRCS) $(SDK_SRCS) $(IMGUI_SRCS) $(JNIHOOK_SRCS)
 ALL_OBJS = $(ALL_SRCS:.cpp=.o)
+ALL_DEPS = $(ALL_OBJS:.o=.d)
 
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/flaway.so
@@ -109,24 +116,32 @@ TARGET = $(BUILD_DIR)/flaway.so
 .PHONY: all build clean check-deps
 
 # `all` only bounds the job count; the real build lives in `build`.
+# NOTE: the phony target is called `build` while the directory is also `build`;
+# never list $(BUILD_DIR) as a prerequisite of the `build` target - make treats
+# it as a self-dependency, drops the edge and the mkdir recipe ends up running
+# AFTER the link. The directory is created via the order-only prerequisite below.
 all:
 	+@$(MAKE) --no-print-directory -j$(JOBS) build
 
-build: $(BUILD_DIR) $(TARGET)
+build: $(TARGET)
 
-$(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
-
+# Create the output dir inline instead of via a separate `build` target: the
+# phony target name and the directory name are the same, which made make infer
+# "build depends on build/flaway.so" (a cycle) and print
+#   "Cyclic dependency build/flaway.so <- build dropped".
 $(TARGET): $(ALL_OBJS)
+	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) -o $@ $^ -shared $(LDLIBS)
 	@echo "[+] Built $(TARGET)"
 	@ls -lh $(TARGET)
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(DEPFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(ALL_OBJS) $(TARGET)
+	rm -f $(ALL_OBJS) $(ALL_DEPS) $(TARGET)
+
+-include $(ALL_DEPS)
 
 # Check for required packages
 check-deps:
@@ -136,5 +151,3 @@ check-deps:
 	@pkg-config --exists gl  || echo "WARNING: libgl-dev not found"
 	@test -n "$(JAVA_HOME)" || echo "WARNING: JAVA_HOME not set"
 	@echo "Done."
-
-.PHONY: all build clean check-deps

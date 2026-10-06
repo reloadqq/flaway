@@ -33,14 +33,15 @@ void flaway::modules::autojumpreset::run()
 		return;
 	}
 
-	jobject player = sdk::instance->get_player();
-	if (!player) return;
-
+	// env first: on the `!env` path we could not DeleteLocalRef(player) anyway.
 	auto env = flaway::instance->get_env();
 	if (!env)
 	{
 		return;
 	}
+
+	jobject player = sdk::instance->get_player();
+	if (!player) return;
 
 	// Get current health
 	jclass living_entity_class = sdk::classloader::find_class(env, sdk::mappings::living_entity_class_sig);

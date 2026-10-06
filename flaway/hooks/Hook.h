@@ -55,6 +55,7 @@ namespace linux_hook {
     void wait_gui_shutdown();
     void release_gui_resources();
     void remove_all_hooks();
+    void reset_fbo_cache();
     float get_game_fps();
     // Installs the SIGCONT handler used to detect a re-inject (gdb sends
     // SIGCONT when it detaches). Must be called once at library load.

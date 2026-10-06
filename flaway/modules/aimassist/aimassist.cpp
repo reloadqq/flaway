@@ -566,7 +566,7 @@ static void apply_smooth_rotation()
 static void do_return_step()
 {
 	auto env = flaway::instance->get_env();
-	if (!env) { g_return_mode = false; return; }
+	if (!env) { g_return_mode = false; g_restore_valid = false; return; }
 
 	{
 		static int r_mx = 0, r_my = 0;
@@ -575,13 +575,13 @@ static void do_return_step()
 		if (r_mx || r_my)
 		{
 			int dm = std::abs(mx - r_mx) + std::abs(my - r_my);
-			if (dm > 3) { g_return_mode = false; return; }
+			if (dm > 3) { g_return_mode = false; g_restore_valid = false; return; }
 		}
 		r_mx = mx; r_my = my;
 	}
 
 	jobject p = sdk::instance->get_player();
-	if (!p) { g_return_mode = false; return; }
+	if (!p) { g_return_mode = false; g_restore_valid = false; return; }
 
 	sdk::entity_client lc(p);
 	float cy = lc.get_yaw();
@@ -604,7 +604,10 @@ static void do_return_step()
 	if ((std::abs(dy) < 0.4f && std::abs(dp) < 0.4f) ||
 		now - g_return_start_us > 700000LL)
 	{
+		// Return finished: drop the restore point so the NEXT aiming session
+		// captures a fresh one instead of reusing this (stale) rotation.
 		g_return_mode = false;
+		g_restore_valid = false;
 		env->DeleteLocalRef(p);
 		return;
 	}
@@ -642,6 +645,7 @@ void flaway::modules::aimassist::run()
 			reset_aim_state();
 		}
 		g_was_aiming = false;
+		g_restore_valid = false;
 		g_locked_id = -1;
 		g_lost_frames = 0;
 		g_mouse_tracked = false;
@@ -868,6 +872,7 @@ void flaway::modules::aimassist::run()
 			g_lost_frames = 0;
 			reset_aim_state();
 			g_was_aiming = false;
+			g_restore_valid = false;
 			g_mouse_tracked = true;
 			g_prev_mouse_x = mx;
 			g_prev_mouse_y = my;
@@ -893,6 +898,7 @@ void flaway::modules::aimassist::run()
 			g_lost_frames = 0;
 			reset_aim_state();
 			g_was_aiming = false;
+			g_restore_valid = false;
 			g_prev_key_state = key_state;
 			for (jobject p : players) if (p) env->DeleteLocalRef(p);
 			for (jobject m : mobs) if (m) env->DeleteLocalRef(m);
@@ -933,18 +939,10 @@ void flaway::modules::aimassist::run()
 				g_return_last_us = 0;
 			}
 		}
-		if (!g_was_aiming)
-		{
-			jobject lp2 = sdk::instance->get_player();
-			if (lp2)
-			{
-				sdk::entity_client le(lp2);
-				g_restore_yaw = le.get_yaw();
-				g_restore_pitch = le.get_pitch();
-				g_restore_valid = true;
-				env->DeleteLocalRef(lp2);
-			}
-		}
+		// NOTE: the restore point must NOT be captured here. At this moment the
+		// view is already where aim left it, so do_return_step() would compute
+		// dy~0 and return without moving anything. It is captured at the moment
+		// aiming actually starts instead (see run()'s apply_smooth_rotation call).
 		for (jobject p : players) if (p) env->DeleteLocalRef(p);
 		for (jobject m : mobs) if (m) env->DeleteLocalRef(m);
 		env->DeleteLocalRef(world);
@@ -1339,6 +1337,16 @@ void flaway::modules::aimassist::run()
 		telemetry::record(snap);
 	}
 
+	// Capture the pre-aim rotation exactly once per aiming session, before this
+	// frame's rotation is applied. current_yaw/current_pitch were read at the
+	// top of run(), i.e. still the player's own view.
+	if (!g_restore_valid && g_locked_id != -1)
+	{
+		g_restore_yaw = current_yaw;
+		g_restore_pitch = current_pitch;
+		g_restore_valid = true;
+	}
+
 	apply_smooth_rotation();
 
 	g_was_aiming = true;
@@ -1375,7 +1383,10 @@ void flaway::modules::aimassist::draw_fov()
 		(int)(globals::esp_fov_color[3] * 255));
 
 	dl->AddCircle(center, radius, col, 64, 1.5f);
-	dl->AddCircleFilled(center, radius, col & IM_COL32(0, 0, 0, 32));
+	// Keep the user's RGB and force alpha to 32. `col & IM_COL32(0,0,0,32)`
+	// is `col & 0x20000000`, which zeroes R/G/B and leaves a random bit of the
+	// packed value - i.e. the fill was never the chosen colour.
+	dl->AddCircleFilled(center, radius, (col & ~IM_COL32(0, 0, 0, 255)) | IM_COL32(0, 0, 0, 32));
 }
 
 void flaway::modules::aimassist::cleanup()
@@ -1385,4 +1396,5 @@ void flaway::modules::aimassist::cleanup()
 	g_was_aiming = false;
 	g_has_goal = false;
 	g_return_mode = false;
+	g_restore_valid = false;
 }

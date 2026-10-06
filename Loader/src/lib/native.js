@@ -21,12 +21,16 @@ const safe = (fn) => {
   }
 };
 
-export function initNative() {
+export function initNative({ onRestore } = {}) {
   if (!isNative()) return;
   safe(() => bridge().init());
   safe(() =>
     bridge().events.on("windowClose", () => safe(() => bridge().app.exit()))
   );
+  // Restoring from the taskbar must clear React's `minimized` state, otherwise
+  // `.app.hidden-window` keeps the whole UI at opacity 0 with no way back.
+  safe(() => bridge().events.on("windowRestore", () => onRestore?.()));
+  safe(() => bridge().events.on("windowFocus", () => onRestore?.()));
   safe(() => bridge().window.setDraggableRegion("dragStrip"));
 }
 

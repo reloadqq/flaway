@@ -86,11 +86,20 @@ namespace flaway::modules::gambling {
         if (tiles_revealed >= total_safe_tiles) {
             game_won = true;
             game_active = false;
+            // Payout for the whole stake. The stake itself was already debited
+            // in resetGame(); crediting bet_amount * multiplier here would make
+            // the balance grow on every win and never shrink on a loss.
             balance += bet_amount * current_multiplier;
         }
     }
 
     void MinesGame::resetGame() {
+        // Round open: debit the stake. Without this the player could never
+        // lose money - win pays out, loss pays nothing, balance only climbs.
+        if (game_active && bet_amount > 0.0f)
+            balance -= bet_amount;
+        if (balance < 0.0f) balance = 0.0f;
+
         game_active = false;
         game_won = false;
         game_lost = false;

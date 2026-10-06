@@ -113,8 +113,11 @@ static bool use_item_silent(jobject player, float target_pitch)
 	}
 
 	set_rotation(player, s_yaw, target_pitch);
-	env->CallObjectMethod(interaction_manager, interact_item_mid, player, main_hand);
+	// interactItem returns an ActionResult - delete it, otherwise the local-ref
+	// table fills up on this never-detached thread.
+	jobject interact_res = env->CallObjectMethod(interaction_manager, interact_item_mid, player, main_hand);
 	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (interact_res) env->DeleteLocalRef(interact_res);
 	set_rotation(player, s_yaw, s_pitch);
 
 	env->DeleteLocalRef(main_hand);

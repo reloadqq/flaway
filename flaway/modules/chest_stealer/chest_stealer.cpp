@@ -243,9 +243,16 @@ namespace flaway
 			jobject quick_move_action = nullptr;
 			if (slot_action_class)
 			{
+				// GetStaticFieldID needs a FIELD descriptor ("Lpkg/Cls;"), not a
+				// class name ("pkg/Cls"). Passing slot_action_type_class_sig made
+				// this call always fail with a pending NoSuchFieldError, which was
+				// then swallowed - the values()[1] fallback only worked by accident.
+				std::string quick_move_desc =
+					"L" + std::string(sdk::mappings::slot_action_type_class_sig) + ";";
 				jfieldID quick_move_fid = env->GetStaticFieldID(slot_action_class,
 					sdk::mappings::slot_action_type_quick_move_name,
-					sdk::mappings::slot_action_type_class_sig);
+					quick_move_desc.c_str());
+				if (env->ExceptionCheck()) env->ExceptionClear();
 				if (quick_move_fid)
 					quick_move_action = env->GetStaticObjectField(slot_action_class, quick_move_fid);
 				else

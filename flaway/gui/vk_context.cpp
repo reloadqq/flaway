@@ -75,17 +75,26 @@ static bool create_instance(VkInstance& instance)
 static bool select_physical_device(VkInstance instance, VkPhysicalDevice& physDev,
                                     uint32_t& queueFamily, VkSurfaceKHR surface)
 {
-    uint32_t count;
-    vkEnumeratePhysicalDevices(instance, &count, nullptr);
-    if (!count) return false;
+    uint32_t count = 0;
+    // Check the return: a failing introspection call leaves `count`
+    // indeterminate, and `if (!count)` would then read UB memory and turn the
+    // garbage into the fill count.
+    if (vkEnumeratePhysicalDevices(instance, &count, nullptr) != VK_SUCCESS || count == 0)
+        return false;
 
     VkPhysicalDevice devices[8];
+    // Clamp BEFORE the filling call: Vulkan writes up to *pPhysicalDeviceCount
+    // entries, so an unclamped count overflows the 8-element stack array. (The
+    // `i < 8` on the loop only clamps iteration, not the write.)
+    if (count > 8) count = 8;
     vkEnumeratePhysicalDevices(instance, &count, devices);
 
-    for (uint32_t i = 0; i < count && i < 8; i++) {
-        uint32_t qCount;
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t qCount = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &qCount, nullptr);
         VkQueueFamilyProperties qProps[16];
+        // Same overflow as above, one level down.
+        if (qCount > 16) qCount = 16;
         vkGetPhysicalDeviceQueueFamilyProperties(devices[i], &qCount, qProps);
         for (uint32_t j = 0; j < qCount && j < 16; j++) {
             if (qProps[j].queueFlags & VK_QUEUE_GRAPHICS_BIT) {

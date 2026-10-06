@@ -46,26 +46,48 @@ namespace flaway
         void friend_manager::add(const std::string& nick)
         {
             if (nick.empty()) return;
-            std::lock_guard<std::mutex> lock(s_mutex);
-            for (const auto& f : s_friends)
+            std::vector<std::string> snapshot;
             {
-                if (f == nick) return;
+                std::lock_guard<std::mutex> lock(s_mutex);
+                for (const auto& f : s_friends)
+                {
+                    if (f == nick) return;
+                }
+                s_friends.push_back(nick);
+                snapshot = s_friends;
             }
-            s_friends.push_back(nick);
+            // Disk I/O outside the lock: is_friend() runs per-entity on the
+            // render thread and must not stall behind a file write.
             logger::log("[friend] added: " + nick);
-            save();
+            save_list(snapshot);
         }
 
-        void friend_manager::remove(const std::string& nick)
+        void friend_manager::remove(std::string nick)
         {
-            std::lock_guard<std::mutex> lock(s_mutex);
-            auto it = std::remove(s_friends.begin(), s_friends.end(), nick);
-            if (it != s_friends.end())
+            // By value: the argument must not alias an element of s_friends,
+            // otherwise std::remove() may move over the very string it compares.
+            std::vector<std::string> snapshot;
             {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                auto it = std::remove(s_friends.begin(), s_friends.end(), nick);
+                if (it == s_friends.end()) return;
                 s_friends.erase(it, s_friends.end());
-                logger::log("[friend] removed: " + nick);
-                save();
+                snapshot = s_friends;
             }
+            logger::log("[friend] removed: " + nick);
+            save_list(snapshot);
+        }
+
+        void friend_manager::clear()
+        {
+            std::vector<std::string> snapshot;
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                if (s_friends.empty()) return;
+                s_friends.clear();
+            }
+            logger::log("[friend] list cleared");
+            save_list(snapshot);
         }
 
         bool friend_manager::is_friend(const std::string& nick)
@@ -79,21 +101,32 @@ namespace flaway
             return false;
         }
 
-        const std::vector<std::string>& friend_manager::get_list()
+        std::vector<std::string> friend_manager::get_list()
         {
+            std::lock_guard<std::mutex> lock(s_mutex);
             return s_friends;
         }
 
-        void friend_manager::save()
+        void friend_manager::save_list(const std::vector<std::string>& friends)
         {
             ENH_MKDIR(friends_dir().c_str());
             std::ofstream f(friends_path(), std::ios::out | std::ios::trunc);
             if (!f.is_open()) return;
-            for (const auto& nick : s_friends)
+            for (const auto& nick : friends)
             {
                 f << nick << "\n";
             }
             f.close();
+        }
+
+        void friend_manager::save()
+        {
+            std::vector<std::string> snapshot;
+            {
+                std::lock_guard<std::mutex> lock(s_mutex);
+                snapshot = s_friends;
+            }
+            save_list(snapshot);
         }
 
         void friend_manager::load()

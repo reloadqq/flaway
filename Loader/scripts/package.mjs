@@ -1,8 +1,11 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = process.cwd();
+// Resolve against this file, not process.cwd(): running the script from any
+// other directory would otherwise look for dist/ in the wrong place.
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dist = path.join(root, "dist");
 const binName = "flaway-dlc";
 const stage = path.join(dist, binName);

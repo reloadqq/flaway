@@ -6,6 +6,7 @@
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
 #include <iostream>
+#include <atomic>
 #include <mutex>
 #include <unordered_set>
 #include <algorithm>
@@ -16,8 +17,19 @@
 namespace x11_helper {
 
     typedef int (*XNextEvent_t)(Display*, XEvent*);
-    static XNextEvent_t o_XNextEvent = nullptr;
+    // Atomic: read from the event thread, written by shutdown(). The pointer is
+    // deliberately NOT nulled on shutdown (see shutdown()) because a thread
+    // already inside the hook must still be able to call through it.
+    static std::atomic<XNextEvent_t> o_XNextEvent{nullptr};
     static void* s_xnext_target = nullptr;
+
+    // XInitThreads() is intentionally NOT called: Xlib only honours it if it
+    // runs before ANY other Xlib call in the process, and by injection time
+    // GLFW/the game/the JVM have already called XOpenDisplay, making it a
+    // no-op. Serialisation is therefore the only real fix for the fact that
+    // g_display is touched from several threads (module threads here, the
+    // event thread inside hooked_XNextEvent).
+    static std::recursive_mutex g_xlib_mu;
 
     static InputData g_input;
     static std::mutex g_input_mutex;
@@ -53,6 +65,7 @@ namespace x11_helper {
             data = g_input;
             g_input.wheel = 0.0f;
             g_input.key_char = 0;
+            g_input.key_text.clear();
             g_input.mouse_down[3] = 0;
             g_input.mouse_down[4] = 0;
         }
@@ -151,11 +164,13 @@ namespace x11_helper {
         if (!g_display) return;
         build_kc_to_vk_table(g_display);
         char keys[32] = {};
-        XQueryKeymap(g_display, keys);
+        {
+            std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
+            XQueryKeymap(g_display, keys);
+        }
 
         std::lock_guard<std::mutex> lock(g_input_mutex);
-        for (int kc = 8; kc <= 127; kc++) {
-            if (kc / 8 >= 32) break;
+        for (int kc = 8; kc < 256; kc++) {
             bool down = ((keys[kc >> 3] >> (kc & 7)) & 1) != 0;
             bool rising = down && !g_scan_prev[kc];
             bool falling = !down && g_scan_prev[kc];
@@ -267,8 +282,12 @@ namespace x11_helper {
     }
 
 	int hooked_XNextEvent(Display* display, XEvent* event) {
-		if (!o_XNextEvent || !display || !event) return 0;
-		int result = o_XNextEvent(display, event);
+		// Acquire once into a local: the shutdown() store must not race the
+		// call-through, and the original pointer stays valid because the
+		// trampoline remains mapped after remove_hook().
+		XNextEvent_t orig = o_XNextEvent.load(std::memory_order_acquire);
+		if (!orig || !display || !event) return 0;
+		int result = orig(display, event);
 
 		if (event) {
             std::lock_guard<std::mutex> lock(g_input_mutex);
@@ -337,7 +356,12 @@ namespace x11_helper {
                     char buf[32] = {0};
                     int len = XLookupString(&event->xkey, buf, sizeof(buf) - 1, nullptr, nullptr);
                     if (len > 0) {
+                        if (len > (int)sizeof(buf) - 1) len = (int)sizeof(buf) - 1;
+                        // XLookupString returns multi-byte UTF-8 for composed
+                        // and non-ASCII keysyms; keep the whole sequence so the
+                        // GUI can decode every codepoint, not just the lead byte.
                         g_input.key_char = (unsigned char)buf[0];
+                        g_input.key_text.assign(buf, (size_t)len);
                     }
                     break;
                 }
@@ -358,7 +382,9 @@ namespace x11_helper {
     }
 
     void init() {
-        XInitThreads();
+        // Do NOT call XInitThreads() — it only takes effect before the first
+        // Xlib call in the process, which happened long before we were
+        // injected. Every Xlib use from a non-event thread holds g_xlib_mu.
         void* handle = dlopen("libX11.so.6", RTLD_LAZY);
         if (!handle) {
             logger::log_error("[X11] Failed to load libX11.so.6");
@@ -459,12 +485,14 @@ namespace x11_helper {
     }
 
     void set_cursor_pos(int x, int y) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return;
         XWarpPointer(g_display, None, DefaultRootWindow(g_display), 0, 0, 0, 0, x, y);
         XFlush(g_display);
     }
 
     bool send_key_press(unsigned int vk, bool press) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return false;
         KeySym ks = linux_hook::vk_to_keysym((int)vk);
         if (!ks) return false;
@@ -476,6 +504,7 @@ namespace x11_helper {
     }
 
     bool send_mouse_click(int button, bool press) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return false;
         unsigned int xb = vk_to_xbutton(button);
         if (!xb) return false;
@@ -485,6 +514,7 @@ namespace x11_helper {
     }
 
     bool send_mouse_move_abs(int x, int y) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return false;
         XTestFakeMotionEvent(g_display, -1, x, y, 0);
         XFlush(g_display);
@@ -492,6 +522,7 @@ namespace x11_helper {
     }
 
     bool send_mouse_move_rel(int dx, int dy) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return false;
         XTestFakeRelativeMotionEvent(g_display, dx, dy, 0);
         XFlush(g_display);
@@ -499,6 +530,7 @@ namespace x11_helper {
     }
 
     bool is_key_pressed(unsigned int vk) {
+        std::lock_guard<std::recursive_mutex> lk(g_xlib_mu);
         if (!g_display) return false;
         KeySym ks = linux_hook::vk_to_keysym((int)vk);
         if (!ks) return false;
@@ -516,7 +548,11 @@ namespace x11_helper {
             linux_hook::remove_hook(s_xnext_target);
             s_xnext_target = nullptr;
         }
-        o_XNextEvent = nullptr;
+        // Intentionally NOT nulling o_XNextEvent: remove_hook() restores the
+        // original bytes but the trampoline stays mapped, so a thread already
+        // inside the hook can still call through safely. Nulling it would make
+        // the early-return path skip filling *event entirely and leave the
+        // game's event loop dispatching an uninitialised XEvent.
         // Intentionally NOT calling XCloseDisplay(g_display). The display
         // connection belongs to the game/GLFW; closing it while other threads
         // (GL, X11 event loop) may still use it causes use-after-close crashes.

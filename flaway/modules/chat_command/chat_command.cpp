@@ -98,21 +98,19 @@ static bool handle_friend_command(const std::string& msg)
 	}
 	else if (sub_cmd == "list")
 	{
-		const auto& friends = flaway::modules::friend_manager::get_list();
+		const auto friends = flaway::modules::friend_manager::get_list();
 		fprintf(stderr, "[chat_command] Friends list (%zu):\n", friends.size()); fflush(stderr);
 		for (const auto& f : friends)
 		{
+			// `f` is only used by the (no-op under no_log.h) fprintf below.
+			(void)f.c_str();
 			fprintf(stderr, "[chat_command]   - %s\n", f.c_str()); fflush(stderr);
 		}
 		return true;
 	}
 	else if (sub_cmd == "clear")
 	{
-		const auto& friends = flaway::modules::friend_manager::get_list();
-		for (const auto& f : friends)
-		{
-			flaway::modules::friend_manager::remove(f);
-		}
+		flaway::modules::friend_manager::clear();
 		fprintf(stderr, "[chat_command] Friends list cleared\n"); fflush(stderr);
 		return true;
 	}
@@ -183,22 +181,16 @@ bool flaway::modules::chat_command::init()
 	auto jvm = flaway::instance->get_java_vm();
 	if (!env || !jvm) return false;
 
+	// JNIHook_Init is idempotent; the refcount is incremented only on the
+	// success path below so a failing init() cannot inflate it every frame.
 	if (jnihook_refcount == 0)
 	{
 		jnihook_result_t result = JNIHook_Init(jvm);
-		if (result == JNIHOOK_OK)
-		{
-			jnihook_refcount = 1;
-		}
-		else
+		if (result != JNIHOOK_OK)
 		{
 			fprintf(stderr, "[chat_command] JNIHook_Init failed: %d\n", result); fflush(stderr);
 			return false;
 		}
-	}
-	else
-	{
-		jnihook_refcount++;
 	}
 
  jclass chat_screen_class = sdk::classloader::find_class(env, sdk::mappings::chat_screen_class_sig);
@@ -245,6 +237,7 @@ bool flaway::modules::chat_command::init()
 	env->DeleteLocalRef(chat_screen_class);
 
 	g_hooked = true;
+	jnihook_refcount++;
 	fprintf(stderr, "[chat_command] ChatScreen.sendMessage hook installed (orig=%p)\n",
 		static_cast<void*>(ORIG_send_message)); fflush(stderr);
 	return true;

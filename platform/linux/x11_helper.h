@@ -4,6 +4,7 @@
 
 #include <X11/Xlib.h>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace x11_helper {
@@ -13,6 +14,9 @@ namespace x11_helper {
         int mouse_down[5] = {0};
         float wheel = 0;
         unsigned int key_char = 0;
+        // Full UTF-8 result of XLookupString. key_char is only the lead byte,
+        // so consumers that need composed/non-ASCII text must use this.
+        std::string key_text;
     };
 
     struct MouseButtonEvent {

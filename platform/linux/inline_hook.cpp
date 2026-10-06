@@ -38,8 +38,19 @@ struct hook_entry {
 
 static hook_entry s_hooks[MAX_HOOKS];
 static int s_hook_count = 0;
-static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullptr) {
+// len            : total instruction length in bytes (0 = cannot decode)
+// is_rip_rel     : instruction references memory RIP-relatively (disp32 present)
+// disp_off       : byte offset of that disp32 within the instruction
+// rel8_off       : byte offset of a rel8 branch displacement (Jcc/JMP/LOOP/JECXZ)
+//                 The disp32 is NOT always the last 4 bytes: instructions with a
+//                 trailing immediate (e.g. `83 3D disp32 imm8`, `C7 05 disp32
+//                 imm32`) put the immediate last, so `ilen - 4` would overwrite
+//                 it and execute a corrupted instruction in the trampoline.
+static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullptr,
+                                  int* disp_off = nullptr, int* rel8_off = nullptr) {
     if (is_rip_rel) *is_rip_rel = false;
+    if (disp_off) *disp_off = -1;
+    if (rel8_off) *rel8_off = -1;
     if (!code) return 0;
 
     const uint8_t* p = code;
@@ -48,7 +59,9 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
     int imm_size = 0;
     bool pref66 = false;
     bool rex_w = false;
-    uint8_t op;
+    // Initialised: the EVEX/VEX paths jump straight to `modrm` without ever
+    // assigning op, and the F6/F7 immediate test below reads it.
+    uint8_t op = 0;
 
     // ---- Step 1: legacy prefixes (max 4) ----
     for (int i = 0; i < 4; i++) {
@@ -123,9 +136,20 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
         return len + (pref66 ? 2 : 4);
     }
     // JMP rel8
-    if (op == 0xEB) return len + 1;
+    if (op == 0xEB) { if (rel8_off) *rel8_off = len; return len + 1; }
     // Jcc rel8 (0x70-0x7F)
-    if (op >= 0x70 && op <= 0x7F) return len + 1;
+    if (op >= 0x70 && op <= 0x7F) { if (rel8_off) *rel8_off = len; return len + 1; }
+    // MOVSXD r64, r/m32
+    if (op == 0x63) { has_modrm = true; goto modrm; }
+    // x87 D8-DF
+    if (op >= 0xD8 && op <= 0xDF) { has_modrm = true; goto modrm; }
+    // TEST AL, imm8 / TEST eAX, imm32
+    if (op == 0xA8) return len + 1;
+    if (op == 0xA9) return len + (pref66 ? 2 : 4);
+    // MOV moffs64, AL/AX/EAX/RAX and the reverse
+    if (op >= 0xA0 && op <= 0xA3) { p += 8; len += 8; return len; }
+    // IN/OUT imm8
+    if (op >= 0xE4 && op <= 0xE7) return len + 1;
     // PUSH/POP reg (0x50-0x5F)
     if (op >= 0x50 && op <= 0x5F) return len;
     // MOV r8, imm8 (0xB0-0xB7)
@@ -145,13 +169,18 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
         op == 0x90 || op == 0xCC || op == 0xCE ||
         op == 0xF2 || op == 0xF3 || op == 0xF0) return len;
     if (op == 0xC2 || op == 0xCA) return len + 2; // ret imm16
-    if (op == 0xE2 || op == 0xE0 || op == 0xE1) return len + 1; // LOOP
+    // LOOP / LOOPcc / JECXZ/JRCXZ — all are rel8
+    if (op == 0xE2 || op == 0xE0 || op == 0xE1 || op == 0xE3) {
+        if (rel8_off) *rel8_off = len;
+        return len + 1;
+    }
     if (op == 0xC8) return len + 3; // ENTER
     if (op == 0xCD) return len + 1; // INT
 
     // ---- CALL/JMP rel32 ----
     if (op == 0xE8 || op == 0xE9) {
         if (is_rip_rel) *is_rip_rel = true;
+        if (disp_off) *disp_off = len;
         return len + 4;
     }
 
@@ -176,6 +205,7 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
         // Jcc rel32
         if (op2 >= 0x80 && op2 <= 0x8F) {
             if (is_rip_rel) *is_rip_rel = true;
+            if (disp_off) *disp_off = len;
             return len + 4;
         }
 
@@ -189,8 +219,11 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
                 return len;
         }
 
-        // Opcodes with imm8 after ModRM
-        if (op2 == 0xA4 || op2 == 0xAC || op2 == 0xBA || op2 == 0xC2 || op2 == 0xC6)
+        // Opcodes with imm8 after ModRM (including the 0F 70/71/72/73 and
+        // 0F 78/79 forms, which are 1 byte short without this).
+        if (op2 == 0xA4 || op2 == 0xAC || op2 == 0xBA || op2 == 0xC2 || op2 == 0xC6 ||
+            op2 == 0x70 || op2 == 0x71 || op2 == 0x72 || op2 == 0x73 ||
+            op2 == 0x78 || op2 == 0x79)
             imm_size = 1;
 
         has_modrm = true;
@@ -210,10 +243,16 @@ static int get_instruction_length(const uint8_t* code, bool* is_rip_rel = nullpt
         case 0x84: case 0x85: case 0x86: case 0x87:
         case 0x88: case 0x89: case 0x8A: case 0x8B:
         case 0x8C: case 0x8D: case 0x8E: case 0x8F:
-        case 0xC0: case 0xC1:
         case 0xD0: case 0xD1: case 0xD2: case 0xD3:
-        case 0xF6: case 0xF7:
         case 0xFE: case 0xFF:
+            has_modrm = true; break;
+
+        // Shift/rotate by imm8 — these were measured 1 byte short.
+        case 0xC0: case 0xC1:
+            has_modrm = true; imm_size = 1; break;
+        // TEST r/m, imm — the immediate size depends on ModRM.reg, resolved
+        // in the modrm block below.
+        case 0xF6: case 0xF7:
             has_modrm = true; break;
 
         case 0x80: case 0x82: case 0x83: case 0xC6:
@@ -236,6 +275,9 @@ modrm:
 
     if (mod == 0 && rm == 5) {
         if (is_rip_rel) *is_rip_rel = true;
+        // Record where the disp32 starts BEFORE advancing: it is followed by
+        // the immediate on some opcodes.
+        if (disp_off) *disp_off = len;
         len += 4;
     } else if (mod == 1) { p++; len++; }
     else if (mod == 2) { len += 4; }
@@ -247,15 +289,16 @@ modrm:
     }
 
     // ---- Step 6: immediate ----
-    len += imm_size;
-    if (len > 15) len = 15;
-    return len;
-}
+    // F6/F7 with ModRM.reg 0/1 are TEST and carry an immediate; reg >= 2
+    // (NOT/NEG/MUL/IMUL/DIV/IDIV) has none.
+    if (op == 0xF6) imm_size = (((modrm_byte >> 3) & 7) <= 1) ? 1 : 0;
+    if (op == 0xF7) imm_size = (((modrm_byte >> 3) & 7) <= 1) ? (pref66 ? 2 : 4) : 0;
 
-static bool is_rip_relative(const uint8_t* instr) {
-    bool result = false;
-    get_instruction_length(instr, &result);
-    return result;
+    len += imm_size;
+    // Never clamp: returning a short length would restart the decoder inside
+    // this instruction and corrupt every later length/displacement decision.
+    if (len > 15) return 0;
+    return len;
 }
 
 static bool set_mem_permissions(void* addr, size_t size, int prot) {
@@ -326,16 +369,92 @@ void* install_hook(void* target, void* detour) {
 
     size_t copied = 0;
     bool has_rip_rel = false;
-    
+
+    // Steal whole instructions until the absolute jmp (14 bytes) fits.
     while (copied < 14) {
         const uint8_t* instr = (const uint8_t*)target + copied;
         bool is_rip = false;
         int ilen = get_instruction_length(instr, &is_rip);
-        
-        if (ilen <= 0 || ilen > 15) { ilen = 1; }
+
+        // Never split an instruction: restarting the decoder inside one
+        // corrupts every later length/rip-rel decision, which in turn corrupts
+        // entry.hook_size, original_bytes and the relocation walk.
+        if (ilen <= 0 || ilen > 15) {
+            char buf[192];
+            snprintf(buf, sizeof(buf), "install_hook: cannot decode instruction at +%zu, refusing to hook", copied);
+            ih_diag(buf);
+            return nullptr;
+        }
         if (is_rip) { has_rip_rel = true; }
         copied += ilen;
         if (copied >= 64) break;
+    }
+
+    // A rel8 branch whose target falls past the stolen window cannot be
+    // relocated: the 8-bit displacement would land in the trampoline's
+    // abs-jmp tail (or unmapped memory) instead of the original code.
+    // Extend the steal window so the target sits inside it — the relative
+    // displacement then stays valid in the trampoline because both the
+    // branch and its target move together. Cap at 64 bytes; if the target
+    // is still outside (or before) the window, refuse to hook.
+    //
+    // Without this, glfwSwapBuffers (`lea/mov/test/je +0x13` with hook_size=19,
+    // branch target at +32) fails install_hook entirely and the menu never
+    // appears — the same bytes the pre-check build installed successfully.
+    for (int pass = 0; pass < 8 && copied < 64; pass++) {
+        bool extended = false;
+        size_t off = 0;
+        while (off < copied) {
+            const uint8_t* instr = (const uint8_t*)target + off;
+            int rel8_off = -1;
+            bool is_rip = false;
+            int ilen = get_instruction_length(instr, &is_rip, nullptr, &rel8_off);
+            if (ilen <= 0 || ilen > 15) break;
+            if (is_rip) has_rip_rel = true;
+            if (rel8_off >= 0) {
+                long toff = (long)off + ilen + (long)(int8_t)instr[rel8_off];
+                if (toff >= (long)copied) {
+                    size_t need = (size_t)toff + 1;
+                    if (need > 64) need = 64;
+                    while (copied < need) {
+                        const uint8_t* next = (const uint8_t*)target + copied;
+                        bool is_rip2 = false;
+                        int ilen2 = get_instruction_length(next, &is_rip2);
+                        if (ilen2 <= 0 || ilen2 > 15) { copied = 64; break; }
+                        if (is_rip2) has_rip_rel = true;
+                        copied += ilen2;
+                        if (copied >= 64) break;
+                    }
+                    extended = true;
+                    break;
+                }
+            }
+            off += (size_t)ilen;
+        }
+        if (!extended) break;
+    }
+
+    // Final coverage check: any rel8 still outside the window?
+    {
+        size_t off = 0;
+        while (off < copied) {
+            const uint8_t* instr = (const uint8_t*)target + off;
+            int rel8_off = -1;
+            int ilen = get_instruction_length(instr, nullptr, nullptr, &rel8_off);
+            if (ilen <= 0 || ilen > 15) break;
+            if (rel8_off >= 0) {
+                long toff = (long)off + ilen + (long)(int8_t)instr[rel8_off];
+                if (toff < 0 || toff >= (long)copied) {
+                    char buf[192];
+                    snprintf(buf, sizeof(buf),
+                             "install_hook: rel8 branch at +%zu still escapes (target=%ld window=%zu), refusing",
+                             off, toff, copied);
+                    ih_diag(buf);
+                    return nullptr;
+                }
+            }
+            off += (size_t)ilen;
+        }
     }
 
     entry.hook_size = copied;
@@ -392,37 +511,62 @@ void* install_hook(void* target, void* detour) {
         ih_diag(hexmsg);
     }
     
-    if (has_rip_rel) {
+    // Always walk the relocated window: the rel8 coverage check must run even
+    // when no instruction is RIP-relative (a short branch can still escape).
+    {
         size_t off = 0;
         while (off < copied) {
             const uint8_t* orig_instr = (const uint8_t*)target + off;
             uint8_t* tramp_instr = tramp + off;
-            
-            if (is_rip_relative(orig_instr)) {
-                int ilen = get_instruction_length(orig_instr);
-                if (ilen >= 5) {
-                    int32_t orig_disp;
-                    // FIX: Displacement is always the last 4 bytes of a 32-bit rel instruction
-                    int disp_offset = ilen - 4; 
-                    memcpy(&orig_disp, orig_instr + disp_offset, 4);
-                    
-                    uintptr_t orig_next = (uintptr_t)target + off + ilen;
-                    uintptr_t abs_addr = orig_next + (intptr_t)orig_disp;
-                    
-                    uintptr_t new_next = (uintptr_t)trampoline + off + ilen;
-                    intptr_t new_disp = (intptr_t)(abs_addr - new_next);
-                    
-                    if (new_disp < INT32_MIN || new_disp > INT32_MAX) {
-                        munmap(trampoline, TRAMP_SIZE);
-                        return nullptr;
-                    }
-                    
-                    int32_t corrected_disp = (int32_t)new_disp;
-                    memcpy(tramp_instr + disp_offset, &corrected_disp, 4);
+
+            int rel8_off = -1;
+            int disp_offset = -1;
+            bool rip = false;
+            int ilen = get_instruction_length(orig_instr, &rip, &disp_offset, &rel8_off);
+
+            if (ilen <= 0) {
+                // install_hook already refuses to hook undecodable sequences;
+                // this is belt-and-braces for anything that slipped through.
+                munmap(trampoline, TRAMP_SIZE);
+                ih_diag("install_hook: undecodable instruction in relocated window");
+                return nullptr;
+            }
+
+            // Short branches: if the target lies outside the relocated window
+            // the relative displacement no longer resolves (it would land in
+            // the zero-filled tail past the absolute jmp, or before the
+            // mapping) -> SIGSEGV. install_hook extends hook_size to cover
+            // these targets before we get here; this is the final guard.
+            if (rel8_off >= 0) {
+                long toff = (long)off + ilen + (long)(int8_t)orig_instr[rel8_off];
+                if (toff < 0 || toff >= (long)copied) {
+                    munmap(trampoline, TRAMP_SIZE);
+                    ih_diag("install_hook: rel8 branch escapes the relocated window");
+                    return nullptr;
                 }
             }
-            int ilen = get_instruction_length(orig_instr);
-            off += (ilen > 0) ? ilen : 1;
+
+            // RIP-relative fixup. Use the true disp32 offset (NOT ilen - 4):
+            // instructions with a trailing immediate put the immediate last.
+            if (rip && disp_offset >= 0 && ilen >= disp_offset + 4) {
+                int32_t orig_disp;
+                memcpy(&orig_disp, orig_instr + disp_offset, 4);
+
+                uintptr_t orig_next = (uintptr_t)target + off + ilen;
+                uintptr_t abs_addr = orig_next + (intptr_t)orig_disp;
+
+                uintptr_t new_next = (uintptr_t)trampoline + off + ilen;
+                intptr_t new_disp = (intptr_t)(abs_addr - new_next);
+
+                if (new_disp < INT32_MIN || new_disp > INT32_MAX) {
+                    munmap(trampoline, TRAMP_SIZE);
+                    return nullptr;
+                }
+
+                int32_t corrected_disp = (int32_t)new_disp;
+                memcpy(tramp_instr + disp_offset, &corrected_disp, 4);
+            }
+            off += (size_t)ilen;
         }
     }
 

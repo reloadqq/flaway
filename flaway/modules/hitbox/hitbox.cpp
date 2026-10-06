@@ -160,9 +160,11 @@ void flaway::modules::hitbox_expander::reset_entity(jobject entity)
 	double min_y = box.get_min_y();
 	double max_y = box.get_max_y();
 	double min_z = box.get_min_z();
+	double max_z = box.get_max_z();
 
-	double width = max_x - min_x;
+	double width  = max_x - min_x;
 	double height = max_y - min_y;
+	double depth  = max_z - min_z;
 
 	if (std::abs(DEFAULT_WIDTH - width) < 0.001 && std::abs(DEFAULT_HEIGHT - height) < 0.001)
 	{
@@ -174,7 +176,9 @@ void flaway::modules::hitbox_expander::reset_entity(jobject entity)
 
 	double center_x = min_x + width / 2.0;
 	double center_y = min_y + height / 2.0;
-	double center_z = min_z + width / 2.0;
+	// Was min_z + width/2.0 — re-centred the box as if depth == width, which is
+	// only invisible because players are square (0.6 x 0.6).
+	double center_z = min_z + depth / 2.0;
 
 	box.set_min_x(center_x - DEFAULT_WIDTH / 2.0);
 	box.set_max_x(center_x + DEFAULT_WIDTH / 2.0);

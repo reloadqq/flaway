@@ -222,6 +222,11 @@ namespace
 		EBOOL("fullbright.enabled", globals::fullbright_enabled),
 		EINT("fullbright.keybind", globals::fullbright_keybind),
 		EDBL("fullbright.gamma", globals::fullbright_gamma),
+		// Fog visual
+		EBOOL("fog.enabled", globals::fog_enabled),
+		EINT("fog.mode", globals::fog_mode),
+		EF4("fog.color", globals::fog_color),
+		EFLT("fog.strength", globals::fog_strength),
 		// HUD
 		EBOOL("hud.watermark_enabled", globals::hud_watermark_enabled),
 		EBOOL("hud.target_enabled", globals::hud_target_enabled),

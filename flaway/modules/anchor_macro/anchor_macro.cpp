@@ -130,11 +130,12 @@ bool flaway::modules::anchor_macro::is_item(jobject item_stack, const char* item
 void flaway::modules::anchor_macro::swap_to_slot(int slot)
 {
 	if (slot < 0 || slot > 8) return;
-	jobject player = sdk::instance->get_player();
-	if (!player) return;
-	
+	// env first: on the `!env` path we could not DeleteLocalRef(player) anyway.
 	auto env = flaway::instance->get_env();
 	if (!env) return;
+
+	jobject player = sdk::instance->get_player();
+	if (!player) return;
 
 	jclass player_class = env->GetObjectClass(player);
 	if (!player_class)

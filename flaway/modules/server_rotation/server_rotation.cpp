@@ -40,9 +40,13 @@ static void set_rotation(float yaw, float pitch)
 
 void flaway::modules::server_rotation::set_server_rotation(float yaw, float pitch)
 {
+	// Only arm the restore if we actually managed to capture the current
+	// rotation: get_rotation() fails when the player is not available, and
+	// arming on that path would make restore_rotation() write garbage angles.
 	if (!g_rotation_saved)
 	{
-		get_rotation(g_saved_yaw, g_saved_pitch);
+		if (!get_rotation(g_saved_yaw, g_saved_pitch))
+			return;
 		g_rotation_saved = true;
 	}
 	set_rotation(yaw, pitch);

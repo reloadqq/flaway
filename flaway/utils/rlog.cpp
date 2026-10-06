@@ -9,8 +9,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <mutex>
+
 namespace rlog {
 namespace {
+
+// Guards g_fd / g_opened / the token bucket / g_msgs. logf() and frame() are
+// reachable from the render thread AND from install/uninstall diagnostics
+// (Hook.cpp), so without this two threads can both observe g_opened == false
+// and open() the file twice (fd leak + O_TRUNC discarding earlier lines).
+std::mutex g_mu;
 
 int g_fd = -1;
 bool g_opened = false;
@@ -34,6 +42,7 @@ long long mono_ms() {
 }
 
 void ensure_open() {
+	// Called with g_mu held.
 	if (g_opened) return;
 	g_opened = true;
 	char path[512];
@@ -91,7 +100,12 @@ bool budget(const char* msg) {
 			}
 		}
 	}
-	if (!slot) slot = &g_msgs[0]; // table full: recycle
+	if (!slot) {
+		// Table full: do NOT recycle slot 0. Folding unrelated messages into
+		// one entry makes g_msgs[0].hits measure strangers and consumes its
+		// own 12-hit budget on them. The global token bucket still applies.
+		return false;
+	}
 	if (slot->hits == 0) snprintf(slot->text, sizeof(slot->text), "%.*s", (int)sizeof(slot->text) - 1, msg);
 	slot->hits++;
 	return slot->hits <= 12 || (slot->hits % 60) == 0;
@@ -128,10 +142,12 @@ void logf(const char* fmt, ...) {
 	va_start(ap, fmt);
 	vsnprintf(buf, sizeof(buf), fmt, ap);
 	va_end(ap);
+	std::lock_guard<std::mutex> lk(g_mu);
 	emit(buf);
 }
 
 void frame() {
+	std::lock_guard<std::mutex> lk(g_mu);
 	g_frame++;
 	long long now = mono_ms();
 	if (g_t0 < 0) g_t0 = now;

@@ -52,21 +52,16 @@ bool flaway::modules::nametag_hook::init()
 
 	ORIG_render_label = nullptr;
 
+	// JNIHook_Init is idempotent, so a retry after a later failure is safe.
+	// The refcount is incremented ONLY on the success path below - incrementing
+	// it up front made it grow every frame while init() kept failing.
 	if (jnihook_refcount == 0)
 	{
 		jnihook_result_t result = JNIHook_Init(jvm);
-		if (result == JNIHOOK_OK)
-		{
-			jnihook_refcount = 1;
-		}
-		else
+		if (result != JNIHOOK_OK)
 		{
 			return false;
 		}
-	}
-	else
-	{
-		jnihook_refcount++;
 	}
 
 	jclass renderer_class = sdk::classloader::find_class(env, sdk::mappings::entity_renderer_class_sig);
@@ -100,7 +95,13 @@ bool flaway::modules::nametag_hook::init()
 	g_entity_renderer_class = reinterpret_cast<jclass>(env->NewGlobalRef(renderer_class));
 	env->DeleteLocalRef(renderer_class);
 
-	return g_entity_renderer_class != nullptr;
+	if (!g_entity_renderer_class)
+	{
+		return false;
+	}
+
+	jnihook_refcount++;
+	return true;
 }
 
 void flaway::modules::nametag_hook::shutdown()

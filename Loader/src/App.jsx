@@ -42,11 +42,12 @@ export default function App() {
   const toastTimer = useRef(null);
   const injectTimer = useRef(null);
   const injectDelay = useRef(null);
+  const closeTimer = useRef(null);
 
   useParallax(parallax && !closed);
 
   useEffect(() => {
-    initNative();
+    initNative({ onRestore: () => setMinimized(false) });
     const timer = setTimeout(() => setBooted(true), BOOT_MS);
     return () => clearTimeout(timer);
   }, []);
@@ -68,6 +69,7 @@ export default function App() {
       clearTimeout(toastTimer.current);
       clearInterval(injectTimer.current);
       clearTimeout(injectDelay.current);
+      clearTimeout(closeTimer.current);
     },
     []
   );
@@ -119,17 +121,23 @@ export default function App() {
   };
 
   const handleMinimize = () => {
+    // Outside the Neutralino runtime minimizeWindow() is a no-op returning
+    // false; without this guard React still flips `minimized` and the UI
+    // becomes permanently invisible.
+    if (!minimizeWindow()) return;
     setMinimized(true);
-    minimizeWindow();
   };
 
   const handleRestore = () => setMinimized(false);
 
   const handleClose = () => {
     if (closing || closed) return;
+    // exitApp() returns false when not native - bail out instead of unmounting
+    // the whole app onto the unrecoverable "flaway closed" screen.
+    if (!exitApp(520)) return;
     setClosing(true);
-    exitApp(520);
-    setTimeout(() => setClosed(true), 350);
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setClosed(true), 350);
   };
 
   useEffect(() => {

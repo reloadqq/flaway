@@ -59,6 +59,7 @@ struct esp_render_entry
 {
     esp_smooth_state smooth;
     std::string name;
+    std::string tex;   // vanilla texture suffix for ground items ("" = none)
     float health = 20.0f;
     float max_health = 20.0f;
     int hurt_time = 0;

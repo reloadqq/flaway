@@ -17,7 +17,6 @@ flaway/modules/esp/esp.o: flaway/modules/esp/esp.cpp \
  flaway/modules/esp/../../gui/data/pointer_png.h \
  flaway/modules/esp/../../utils/logger.h \
  flaway/modules/esp/../nametag_hook/nametag_hook.h \
- flaway/modules/esp/../aimassist/aimassist.h \
  flaway/modules/esp/../friend_manager/friend_manager.h \
  sdk/minecraft/minecraft.h sdk/minecraft/world/world.h \
  sdk/minecraft/entity/entity.h sdk/classloader.h sdk/projection.h
@@ -47,7 +46,6 @@ flaway/modules/esp/../../gui/hud/hud.h:
 flaway/modules/esp/../../gui/data/pointer_png.h:
 flaway/modules/esp/../../utils/logger.h:
 flaway/modules/esp/../nametag_hook/nametag_hook.h:
-flaway/modules/esp/../aimassist/aimassist.h:
 flaway/modules/esp/../friend_manager/friend_manager.h:
 sdk/minecraft/minecraft.h:
 sdk/minecraft/world/world.h:

@@ -276,7 +276,7 @@ namespace sdk
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#fallDistance
 		inline constexpr const char* entity_fall_distance_name = "field_6017";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#fallDistance
-		inline constexpr const char* entity_fall_distance_sig = "F";
+		inline constexpr const char* entity_fall_distance_sig = "D";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/player/PlayerEntity.html#attack(net.minecraft.entity.Entity)
 		inline constexpr const char* player_attack_name = "method_7324";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/player/PlayerEntity.html#attack(net.minecraft.entity.Entity)

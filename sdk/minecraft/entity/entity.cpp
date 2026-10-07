@@ -301,7 +301,7 @@ double sdk::entity_client::get_fall_distance()
 	if (!env || !entity) return 0.0;
 	if (!g_jni.init(env) || !g_jni.fall_distance) return 0.0;
 
-	jdouble ret = (jdouble)env->GetFloatField(entity, g_jni.fall_distance);
+	jdouble ret = env->GetDoubleField(entity, g_jni.fall_distance);
 	if (env->ExceptionCheck()) env->ExceptionClear();
 	return ret;
 }

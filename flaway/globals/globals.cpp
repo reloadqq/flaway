@@ -2,18 +2,6 @@
 
 namespace globals
 {
-    bool aimassist_enabled = false;
-    int aimassist_keybind = 0;
-    bool aimassist_horizontal = true;
-    bool aimassist_vertical = true;
-    float aimassist_smoothing = 0.0f;
-    double aimassist_max_distance = 6.0;
-    float aimassist_fov = 15.0f;
-    bool aimassist_randomize = false;
-    float aimassist_random_strength = 0.0f;
-    float aimassist_speed = 2.0f;
-    float aimassist_prediction = 0.0f;
-    bool aimassist_telemetry_enabled = false;
     bool triggerbot_enabled = false;
     int triggerbot_keybind = 0;
     int triggerbot_keybind_mode = 0;
@@ -21,6 +9,16 @@ namespace globals
     float triggerbot_distance = 3.0f;
     int triggerbot_sprint_mode = 1;
     bool triggerbot_jump_only = false;
+    bool aimtarget_enabled = false;
+    int aimtarget_keybind = 0;
+    bool aimtarget_players = true;
+    bool aimtarget_mobs = false;
+    bool aimtarget_animals = false;
+    bool aimtarget_friends = true;
+    bool aimtarget_through_walls = false;
+    float aimtarget_threshold = 5.0f;
+    float aimtarget_fov = 180.0f;
+    bool aimtarget_weapon_only = true;
     bool reach_enabled = false;
     int reach_keybind = 0;
     int reach_mode = 0;

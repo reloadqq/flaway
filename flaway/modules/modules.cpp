@@ -6,8 +6,8 @@
 #include "../utils/logger.h"
 #include <thread>
 #include <chrono>
-#include "aimassist/aimassist.h"
 #include "triggerbot/triggerbot.h"
+#include "aimtarget/aimtarget.h"
 #include "hitbox/hitbox.h"
 #include "esp/esp.h"
 #include "mace/mace.h"
@@ -68,8 +68,8 @@ namespace flaway
 				return;
 			}
 
-			toggle_if_keybind(globals::aimassist_keybind, globals::aimassist_enabled);
 			toggle_if_keybind(globals::triggerbot_keybind, globals::triggerbot_enabled);
+			toggle_if_keybind(globals::aimtarget_keybind, globals::aimtarget_enabled);
 			wake_if_keybind(globals::reach_keybind, globals::reach_enabled);
 			toggle_if_keybind(globals::hitbox_keybind, globals::hitbox_enabled);
 			toggle_if_keybind(globals::shield_breaker_keybind, globals::shield_breaker_enabled);
@@ -135,8 +135,8 @@ namespace flaway
 				}
 			}
 
-			aimassist::run();
 			triggerbot::run();
+			aimtarget::run();
 			hitbox_expander::run();
 			esp::run();
 			mace::run();

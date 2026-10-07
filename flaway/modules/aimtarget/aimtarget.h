@@ -6,12 +6,10 @@ namespace flaway
 {
 	namespace modules
 	{
-		class aimassist
+		class aimtarget
 		{
 		public:
 			static void run();
-			static void draw_fov();
-			static int get_locked_id();
 			static void cleanup();
 		};
 	}

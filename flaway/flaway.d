@@ -18,7 +18,7 @@ flaway/flaway.o: flaway/flaway.cpp flaway/utils/no_log.h flaway/flaway.h \
  flaway/modules/storage_esp/storage_esp.h \
  flaway/modules/base_finder/base_finder.h \
  flaway/modules/autosprint/autosprint.h flaway/modules/esp/esp.h \
- sdk/minecraft/util/box.h flaway/modules/aimassist/aimassist.h \
+ sdk/minecraft/util/box.h flaway/modules/aimtarget/aimtarget.h \
  flaway/modules/friend_manager/friend_manager.h \
  flaway/modules/chat_command/chat_command.h \
  utils/jnihook-master/include/jnihook.h flaway/modules/modules.h \
@@ -57,7 +57,7 @@ flaway/modules/base_finder/base_finder.h:
 flaway/modules/autosprint/autosprint.h:
 flaway/modules/esp/esp.h:
 sdk/minecraft/util/box.h:
-flaway/modules/aimassist/aimassist.h:
+flaway/modules/aimtarget/aimtarget.h:
 flaway/modules/friend_manager/friend_manager.h:
 flaway/modules/chat_command/chat_command.h:
 utils/jnihook-master/include/jnihook.h:

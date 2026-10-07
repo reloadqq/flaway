@@ -20,7 +20,6 @@ flaway/gui/GUI.o: flaway/gui/GUI.cpp flaway/utils/no_log.h \
  flaway/gui/../modules/storage_esp/storage_esp.h \
  flaway/gui/../modules/base_finder/base_finder.h \
  flaway/gui/../modules/backtrack/backtrack.h \
- flaway/gui/../modules/aimassist/aimassist.h \
  flaway/gui/../modules/friend_manager/friend_manager.h \
  sdk/minecraft/minecraft.h sdk/minecraft/entity/entity.h \
  flaway/gui/data/fonts.h flaway/gui/data/monocraft_regular.h \
@@ -57,7 +56,6 @@ flaway/gui/../modules/fog/fog.h:
 flaway/gui/../modules/storage_esp/storage_esp.h:
 flaway/gui/../modules/base_finder/base_finder.h:
 flaway/gui/../modules/backtrack/backtrack.h:
-flaway/gui/../modules/aimassist/aimassist.h:
 flaway/gui/../modules/friend_manager/friend_manager.h:
 sdk/minecraft/minecraft.h:
 sdk/minecraft/entity/entity.h:

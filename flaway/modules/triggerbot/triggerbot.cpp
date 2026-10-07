@@ -139,6 +139,75 @@ static void tb_handle_sprint_before(JNIEnv* env, jobject player)
 	}
 }
 
+static bool tb_eye_box_dist(JNIEnv* env, jobject entity, double ox, double oy, double oz, double* out)
+{
+	sdk::entity_client ec(entity);
+	jobject box = ec.get_bounding_box();
+	if (!box) return false;
+	jclass bc = env->GetObjectClass(box);
+	if (!bc) { env->DeleteLocalRef(box); return false; }
+	static const char* fn[6] = {
+		sdk::mappings::box_min_x_name, sdk::mappings::box_min_y_name, sdk::mappings::box_min_z_name,
+		sdk::mappings::box_max_x_name, sdk::mappings::box_max_y_name, sdk::mappings::box_max_z_name };
+	static const char* fs[6] = {
+		sdk::mappings::box_min_x_sig, sdk::mappings::box_min_y_sig, sdk::mappings::box_min_z_sig,
+		sdk::mappings::box_max_x_sig, sdk::mappings::box_max_y_sig, sdk::mappings::box_max_z_sig };
+	jfieldID f[6];
+	for (int i = 0; i < 6; i++)
+	{
+		f[i] = env->GetFieldID(bc, fn[i], fs[i]);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+	}
+	env->DeleteLocalRef(bc);
+	bool ok = f[0] && f[1] && f[2] && f[3] && f[4] && f[5];
+	double mn[3], mx[3];
+	if (ok)
+	{
+		mn[0] = env->GetDoubleField(box, f[0]);
+		mn[1] = env->GetDoubleField(box, f[1]);
+		mn[2] = env->GetDoubleField(box, f[2]);
+		mx[0] = env->GetDoubleField(box, f[3]);
+		mx[1] = env->GetDoubleField(box, f[4]);
+		mx[2] = env->GetDoubleField(box, f[5]);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); ok = false; }
+	}
+	env->DeleteLocalRef(box);
+	if (!ok) return false;
+	double o[3] = { ox, oy, oz };
+	double d2 = 0.0;
+	for (int i = 0; i < 3; i++)
+	{
+		double c = o[i] < mn[i] ? mn[i] : (o[i] > mx[i] ? mx[i] : o[i]);
+		double dd = c - o[i];
+		d2 += dd * dd;
+	}
+	*out = std::sqrt(d2);
+	return true;
+}
+
+static void tb_clear_miss_time(JNIEnv* env)
+{
+	if (!sdk::instance) return;
+	jclass cls = sdk::instance->klass();
+	jobject mc = sdk::instance->get_minecraft();
+	if (!cls || !mc)
+	{
+		if (cls) env->DeleteLocalRef(cls);
+		if (mc) env->DeleteLocalRef(mc);
+		return;
+	}
+	jfieldID fid = env->GetFieldID(cls, sdk::mappings::attack_cooldown_name,
+		sdk::mappings::attack_cooldown_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (fid)
+	{
+		env->SetIntField(mc, fid, 0);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+	}
+	env->DeleteLocalRef(cls);
+	env->DeleteLocalRef(mc);
+}
+
 void flaway::modules::triggerbot::run()
 {
 	static bool seeded = false;
@@ -161,14 +230,6 @@ void flaway::modules::triggerbot::run()
 	}
 
 	tb_tick_sprint_reset();
-
-	// 20 Hz frame throttle
-	{
-		static uint64_t last_scan = 0;
-		uint64_t now = now_ms();
-		if (last_scan && now - last_scan < 50) return;
-		last_scan = now;
-	}
 
 	auto env = flaway::instance->get_env();
 	if (!env) return;
@@ -229,13 +290,11 @@ void flaway::modules::triggerbot::run()
 		return;
 	}
 
-	// Distance check
+	// Distance check: eye -> closest point on the target hitbox (vanilla reach
+	// semantics). The old point test (feet + 1.0) rejected attacks that vanilla
+	// would land at the far edge of reach.
 	if (globals::triggerbot_distance > 0.0f)
 	{
-		sdk::entity_client tgt(hit_entity);
-		double tx = tgt.get_x();
-		double ty = tgt.get_y() + 1.0;
-		double tz = tgt.get_z();
 		sdk::camera_data cam = sdk::instance->get_camera();
 		double ox, oy, oz;
 		if (cam.valid) { ox = cam.x; oy = cam.y; oz = cam.z; }
@@ -247,9 +306,9 @@ void flaway::modules::triggerbot::run()
 			ox = pc.get_x(); oy = pc.get_y() + 1.62; oz = pc.get_z();
 			env->DeleteLocalRef(lp);
 		}
-		double dx = tx - ox, dy = ty - oy, dz = tz - oz;
-		double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-		if (dist > globals::triggerbot_distance)
+		double dist = 0.0;
+		if (tb_eye_box_dist(env, hit_entity, ox, oy, oz, &dist) &&
+			dist > globals::triggerbot_distance)
 		{
 			env->DeleteLocalRef(hit_entity);
 			last_attack_ms = 0;
@@ -324,7 +383,7 @@ void flaway::modules::triggerbot::run()
 																const char* ckey = env->GetStringUTFChars(key, nullptr);
 																if (ckey)
 																{
-																	if (strstr(ckey, "sword") || strstr(ckey, "axe") ||
+																	if (strstr(ckey, "sword") || strstr(ckey, "_axe") ||
 																		strstr(ckey, "mace") || strstr(ckey, "trident") ||
 																		strstr(ckey, "bow") || strstr(ckey, "crossbow"))
 																		weapon = true;
@@ -388,10 +447,9 @@ void flaway::modules::triggerbot::run()
 		{
 			sdk::entity_client lpec(lp);
 			bool on_ground = lpec.is_on_ground();
-			double vy = lpec.get_velocity_y();
 			double fall_dist = lpec.get_fall_distance();
 			env->DeleteLocalRef(lp);
-			bool falling = !on_ground && vy < -0.25 && fall_dist > 0.3;
+			bool falling = !on_ground && fall_dist > 0.05;
 			if (!falling)
 			{
 				env->DeleteLocalRef(hit_entity);
@@ -401,10 +459,10 @@ void flaway::modules::triggerbot::run()
 		}
 	}
 
-	// Attack cooldown check via API — require >= 0.85 progress.
-	// 0.85 fires slightly before full recharge, catching the 1.5-damage
-	// window of a sword (5.25 damage at 100%, 5.0+ at 85%) without
-	// waiting the full625ms cycle.
+	// Attack strength gate: only swing once the weapon is (almost) fully
+	// recharged, so every hit lands at full damage instead of ~80%.
+	uint64_t now = now_ms();
+	float progress = -1.0f;
 	{
 		jclass player_entity_cls = sdk::classloader::find_class(env,
 			sdk::mappings::player_entity_class_sig);
@@ -419,24 +477,25 @@ void flaway::modules::triggerbot::run()
 				jobject lp = sdk::instance->get_player();
 				if (lp)
 				{
-					float progress = env->CallFloatMethod(lp, cooldown_mid, 0.5f);
-					if (env->ExceptionCheck()) env->ExceptionClear();
+					progress = env->CallFloatMethod(lp, cooldown_mid, 0.5f);
+					if (env->ExceptionCheck()) { env->ExceptionClear(); progress = -1.0f; }
 					env->DeleteLocalRef(lp);
-					if (progress >= 0.0f && progress < 0.85f)
-					{
-						env->DeleteLocalRef(hit_entity);
-						last_attack_ms = 0;
-						return;
-					}
 				}
 			}
 			env->DeleteLocalRef(player_entity_cls);
 		}
 	}
+	bool charged = progress >= 0.0f
+		? progress >= 0.99f
+		: (last_attack_ms == 0 || now - last_attack_ms >= 625ULL);
+	if (!charged)
+	{
+		env->DeleteLocalRef(hit_entity);
+		return;
+	}
 
 	// Anti-spam floor: 80ms minimum between attacks (~12.5 attacks/sec max).
 	// This prevents double-clicking but is fast enough to never miss a window.
-	uint64_t now = now_ms();
 	uint64_t elapsed = now - last_attack_ms;
 	if (elapsed < 80ULL)
 	{
@@ -452,8 +511,13 @@ void flaway::modules::triggerbot::run()
 		env->DeleteLocalRef(lp);
 	}
 
+	// Vanilla startAttack() bails out while missTime > 0 (10 tick lockout after
+	// any whiff), which left the trigger dead for half a second after a miss.
+	tb_clear_miss_time(env);
+
 	// ATTACK
-	sdk::instance->do_attack();
+	if (!sdk::instance->do_attack() && globals::debug_logging_enabled)
+		logger::log("[triggerbot] doAttack() returned false");
 	last_attack_ms = now;
 
 	flaway::modules::stap::on_hit();

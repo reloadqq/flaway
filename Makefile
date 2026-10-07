@@ -48,8 +48,8 @@ SRCS = \
     flaway/modules/mace/mace.cpp \
     flaway/modules/shield_breaker/shield_breaker.cpp \
     flaway/modules/hitbox/hitbox.cpp \
-    flaway/modules/aimassist/aimassist.cpp \
     flaway/modules/triggerbot/triggerbot.cpp \
+    flaway/modules/aimtarget/aimtarget.cpp \
     flaway/modules/pearl_catch/pearl_catch.cpp \
     flaway/modules/reach/reach.cpp \
     flaway/modules/reach/reach_hook.cpp \

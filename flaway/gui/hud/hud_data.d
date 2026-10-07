@@ -13,7 +13,6 @@ flaway/gui/hud/hud_data.o: flaway/gui/hud/hud_data.cpp \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
  sdk/minecraft/util/box.h flaway/gui/hud/../../flaway.h \
- flaway/gui/hud/../../modules/aimassist/aimassist.h \
  flaway/gui/hud/../../utils/rlog.h sdk/classloader.h \
  sdk/minecraft/entity/entity.h sdk/minecraft/minecraft.h \
  sdk/minecraft/world/world.h sdk/mappings/mappings.hpp
@@ -40,7 +39,6 @@ sdk/../utils/jnihook-master/include/jnihook.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
 sdk/minecraft/util/box.h:
 flaway/gui/hud/../../flaway.h:
-flaway/gui/hud/../../modules/aimassist/aimassist.h:
 flaway/gui/hud/../../utils/rlog.h:
 sdk/classloader.h:
 sdk/minecraft/entity/entity.h:

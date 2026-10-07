@@ -1,6 +1,5 @@
 #include "hud_internal.h"
 #include "../../flaway.h"
-#include "../../modules/aimassist/aimassist.h"
 #include "../../utils/rlog.h"
 #include <sdk/classloader.h>
 #include <sdk/minecraft/entity/entity.h>
@@ -458,10 +457,6 @@ void refresh_target() {
     s_target.items.clear();
     esp_render_entry e;
     bool found = flaway::modules::esp::snapshot_target(e);
-    if (!found) {
-        int locked = flaway::modules::aimassist::get_locked_id();
-        if (locked > 0) found = flaway::modules::esp::snapshot_entry(locked, e);
-    }
     if (!found) { s_skin_for.clear(); s_target.skin_hash.clear(); s_target.skin_tex = 0; return; }
     s_target.valid = true;
     s_target.name = e.name;

@@ -6,14 +6,14 @@ flaway/modules/modules.o: flaway/modules/modules.cpp \
  flaway/modules/../hooks/Hook.h flaway/modules/../globals/globals.h \
  utils/../platform/linux/windows_compat.h \
  utils/../platform/linux/x11_helper.h flaway/modules/../utils/logger.h \
- flaway/modules/aimassist/aimassist.h sdk/includes.h \
+ flaway/modules/triggerbot/triggerbot.h sdk/includes.h \
  third_party/vulkan_headers/GL/gl.h third_party/vulkan_headers/GL/glx.h \
  sdk/../platform/linux/inline_hook.h sdk/../utils/imgui/imgui.h \
  sdk/../utils/imgui/imconfig.h sdk/../utils/imgui/imgui_impl_opengl3.h \
  sdk/mappings/mappings.hpp sdk/../utils/jnihook-master/include/jnihook.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
- flaway/modules/triggerbot/triggerbot.h flaway/modules/hitbox/hitbox.h \
+ flaway/modules/aimtarget/aimtarget.h flaway/modules/hitbox/hitbox.h \
  flaway/modules/esp/esp.h sdk/minecraft/util/box.h \
  flaway/modules/mace/mace.h \
  flaway/modules/shield_breaker/shield_breaker.h \
@@ -43,7 +43,7 @@ flaway/modules/../globals/globals.h:
 utils/../platform/linux/windows_compat.h:
 utils/../platform/linux/x11_helper.h:
 flaway/modules/../utils/logger.h:
-flaway/modules/aimassist/aimassist.h:
+flaway/modules/triggerbot/triggerbot.h:
 sdk/includes.h:
 third_party/vulkan_headers/GL/gl.h:
 third_party/vulkan_headers/GL/glx.h:
@@ -55,7 +55,7 @@ sdk/mappings/mappings.hpp:
 sdk/../utils/jnihook-master/include/jnihook.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
-flaway/modules/triggerbot/triggerbot.h:
+flaway/modules/aimtarget/aimtarget.h:
 flaway/modules/hitbox/hitbox.h:
 flaway/modules/esp/esp.h:
 sdk/minecraft/util/box.h:

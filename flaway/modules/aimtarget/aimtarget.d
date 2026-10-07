@@ -1,6 +1,6 @@
-flaway/modules/aimassist/aimassist.o: \
- flaway/modules/aimassist/aimassist.cpp flaway/utils/no_log.h \
- flaway/modules/aimassist/aimassist.h sdk/includes.h \
+flaway/modules/aimtarget/aimtarget.o: \
+ flaway/modules/aimtarget/aimtarget.cpp flaway/utils/no_log.h \
+ flaway/modules/aimtarget/aimtarget.h sdk/includes.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/linux/jni_md.h \
  third_party/vulkan_headers/GL/gl.h third_party/vulkan_headers/GL/glx.h \
@@ -10,14 +10,14 @@ flaway/modules/aimassist/aimassist.o: \
  sdk/mappings/mappings.hpp sdk/../utils/jnihook-master/include/jnihook.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
- flaway/modules/aimassist/../../flaway.h \
- flaway/modules/aimassist/../../globals/globals.h \
- flaway/modules/aimassist/../../utils/logger.h \
- flaway/modules/aimassist/../../gui/GUI.h sdk/minecraft/minecraft.h \
- sdk/minecraft/world/world.h sdk/minecraft/entity/entity.h \
- sdk/classloader.h sdk/projection.h
+ flaway/modules/aimtarget/../../flaway.h \
+ flaway/modules/aimtarget/../../globals/globals.h \
+ flaway/modules/aimtarget/../../utils/logger.h \
+ flaway/modules/aimtarget/../friend_manager/friend_manager.h \
+ sdk/minecraft/minecraft.h sdk/minecraft/entity/entity.h \
+ sdk/minecraft/world/world.h sdk/classloader.h sdk/mappings/mappings.hpp
 flaway/utils/no_log.h:
-flaway/modules/aimassist/aimassist.h:
+flaway/modules/aimtarget/aimtarget.h:
 sdk/includes.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/linux/jni_md.h:
@@ -33,12 +33,12 @@ sdk/mappings/mappings.hpp:
 sdk/../utils/jnihook-master/include/jnihook.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
-flaway/modules/aimassist/../../flaway.h:
-flaway/modules/aimassist/../../globals/globals.h:
-flaway/modules/aimassist/../../utils/logger.h:
-flaway/modules/aimassist/../../gui/GUI.h:
+flaway/modules/aimtarget/../../flaway.h:
+flaway/modules/aimtarget/../../globals/globals.h:
+flaway/modules/aimtarget/../../utils/logger.h:
+flaway/modules/aimtarget/../friend_manager/friend_manager.h:
 sdk/minecraft/minecraft.h:
-sdk/minecraft/world/world.h:
 sdk/minecraft/entity/entity.h:
+sdk/minecraft/world/world.h:
 sdk/classloader.h:
-sdk/projection.h:
+sdk/mappings/mappings.hpp:

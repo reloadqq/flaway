@@ -50,19 +50,6 @@ namespace
 #define ESTR(k, v)  { (k), EKind::K_STR,  (void*)&(v), (int)sizeof(v) }
 
 	const entry k_entries[] = {
-		// Aim Assist
-		EBOOL("aimassist.enabled", globals::aimassist_enabled),
-		EINT("aimassist.keybind", globals::aimassist_keybind),
-		EBOOL("aimassist.horizontal", globals::aimassist_horizontal),
-		EBOOL("aimassist.vertical", globals::aimassist_vertical),
-		EFLT("aimassist.smoothing", globals::aimassist_smoothing),
-		EDBL("aimassist.max_distance", globals::aimassist_max_distance),
-		EFLT("aimassist.fov", globals::aimassist_fov),
-		EBOOL("aimassist.randomize", globals::aimassist_randomize),
-		EFLT("aimassist.random_strength", globals::aimassist_random_strength),
-		EFLT("aimassist.speed", globals::aimassist_speed),
-		EFLT("aimassist.prediction", globals::aimassist_prediction),
-		EBOOL("aimassist.telemetry", globals::aimassist_telemetry_enabled),
 		// Triggerbot
 		EBOOL("triggerbot.enabled", globals::triggerbot_enabled),
 		EINT("triggerbot.keybind", globals::triggerbot_keybind),
@@ -71,6 +58,17 @@ namespace
 		EFLT("triggerbot.distance", globals::triggerbot_distance),
 		EINT("triggerbot.sprint_mode", globals::triggerbot_sprint_mode),
 		EBOOL("triggerbot.jump_only", globals::triggerbot_jump_only),
+		// Aimtarget
+		EBOOL("aimtarget.enabled", globals::aimtarget_enabled),
+		EINT("aimtarget.keybind", globals::aimtarget_keybind),
+		EBOOL("aimtarget.players", globals::aimtarget_players),
+		EBOOL("aimtarget.mobs", globals::aimtarget_mobs),
+		EBOOL("aimtarget.animals", globals::aimtarget_animals),
+		EBOOL("aimtarget.friends", globals::aimtarget_friends),
+		EBOOL("aimtarget.through_walls", globals::aimtarget_through_walls),
+		EFLT("aimtarget.threshold", globals::aimtarget_threshold),
+		EFLT("aimtarget.fov", globals::aimtarget_fov),
+		EBOOL("aimtarget.weapon_only", globals::aimtarget_weapon_only),
 		// Reach
 		EBOOL("reach.enabled", globals::reach_enabled),
 		EINT("reach.keybind", globals::reach_keybind),

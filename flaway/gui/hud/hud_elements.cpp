@@ -183,8 +183,8 @@ struct KbRow {
 
 struct KbMod { const char* name; bool* enabled; int* key; };
 const KbMod k_kb[] = {
-    {"Aim Assist", &globals::aimassist_enabled, &globals::aimassist_keybind},
     {"Triggerbot", &globals::triggerbot_enabled, &globals::triggerbot_keybind},
+    {"Aimtarget", &globals::aimtarget_enabled, &globals::aimtarget_keybind},
     {"Reach", &globals::reach_enabled, &globals::reach_keybind},
     {"Hitbox", &globals::hitbox_enabled, &globals::hitbox_keybind},
     {"Shield Breaker", &globals::shield_breaker_enabled, &globals::shield_breaker_keybind},
@@ -705,8 +705,8 @@ void d_poison(Ctx& c, const ImVec2& size) {
 // ===========================================================================
 struct ModRow { const char* name; bool* enabled; };
 const ModRow k_modules[] = {
-    {"Aim Assist", &globals::aimassist_enabled},
     {"Triggerbot", &globals::triggerbot_enabled},
+    {"Aimtarget", &globals::aimtarget_enabled},
     {"Reach", &globals::reach_enabled},
     {"Hitbox", &globals::hitbox_enabled},
     {"Shield Breaker", &globals::shield_breaker_enabled},

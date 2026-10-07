@@ -11,22 +11,6 @@ typedef uint64_t ULONGLONG;
 
 namespace globals
 {
-    // Aim Assist
-    extern bool aimassist_enabled;
-    extern int aimassist_keybind;
-    extern bool aimassist_horizontal;
-    extern bool aimassist_vertical;
-    extern float aimassist_smoothing;
-    extern double aimassist_max_distance;
-    extern float aimassist_fov;
-    extern bool aimassist_randomize;
-    extern float aimassist_random_strength;
-    extern float aimassist_speed;
-    extern float aimassist_prediction;
-
-    // Aim Assist Telemetry
-    extern bool aimassist_telemetry_enabled;
-
     // Triggerbot
     extern bool triggerbot_enabled;
     extern int triggerbot_keybind;
@@ -35,6 +19,18 @@ namespace globals
     extern float triggerbot_distance;          // max attack distance (0.5-6.0)
     extern int triggerbot_sprint_mode;         // 0 HvH, 1 Normal, 2 Legit, 3 Off
     extern bool triggerbot_jump_only;
+
+    // Aimtarget (Aim Assistant)
+    extern bool aimtarget_enabled;
+    extern int aimtarget_keybind;
+    extern bool aimtarget_players;
+    extern bool aimtarget_mobs;
+    extern bool aimtarget_animals;
+    extern bool aimtarget_friends;
+    extern bool aimtarget_through_walls;
+    extern float aimtarget_threshold;      // 1.0 - 5.0
+    extern float aimtarget_fov;            // max aim cone (10 - 180 deg)
+    extern bool aimtarget_weapon_only;
 
     // Reach
     extern bool reach_enabled;

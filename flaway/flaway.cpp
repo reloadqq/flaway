@@ -16,7 +16,7 @@
 #include "modules/base_finder/base_finder.h"
 #include "modules/autosprint/autosprint.h"
 #include "modules/esp/esp.h"
-#include "modules/aimassist/aimassist.h"
+#include "modules/aimtarget/aimtarget.h"
 #include "modules/friend_manager/friend_manager.h"
 #include "modules/chat_command/chat_command.h"
 #include <jnihook.h>
@@ -184,7 +184,7 @@ void flaway::instance_t::shutdown()
     flaway::modules::base_finder::shutdown();
     flaway::modules::autosprint::cleanup();
     flaway::modules::esp::cleanup();
-    flaway::modules::aimassist::cleanup();
+    flaway::modules::aimtarget::cleanup();
 
     try { JNIHook_Shutdown(); } catch (...) {}
 
@@ -389,9 +389,8 @@ void flaway::instance_t::unhook_all()
     crash_dump::set_phase(8);
     logger::log("[flaway] unhook: esp cleanup");
     flaway::modules::esp::cleanup();
+    flaway::modules::aimtarget::cleanup();
 
-    logger::log("[flaway] unhook: aimassist cleanup");
-    flaway::modules::aimassist::cleanup();
 
     // Release entity/status JNI global ref caches.
     {

@@ -9,6 +9,7 @@
 #include <sdk/mappings/mappings.hpp>
 #include <sdk/projection.h>
 #include "../../utils/logger.h"
+#include "../../utils/rlog.h"
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <cfloat>
@@ -29,6 +30,7 @@ static long long g_scan_frame_counter = 0;
 static int64_t g_last_scan_us = 0;
 static bool g_cached = false;
 static int64_t g_resolve_attempt_us = 0;
+static bool g_resolve_logged = false;
 // Set whenever the block list was dropped without a successful scan behind it
 // (module/screen toggled off). Without it the periodic rescan timer below can
 // decide "nothing changed" and keep an empty list on screen.
@@ -43,7 +45,14 @@ static bool g_needs_rescan = false;
 // and IsInstanceOf()/GetFieldID() on them SIGSEGVs (observed in hs_err dumps
 // at jni_IsInstanceOf/oopDesc::metadata_field on the Render thread).
 static jclass g_client_world_class = nullptr;   // class_638 (ClientWorld) [global]
-static jfieldID g_block_entities_field = nullptr; // field_60919 (Set<BlockEntity>)
+static jfieldID g_block_entities_field = nullptr; // field_60919 (Set<BlockEntity>), 1.21.10
+static jmethodID g_world_get_chunk_mid = nullptr; // World.getChunk(II) -> WorldChunk (1.21.4)
+static jclass g_world_chunk_class = nullptr;      // class_2818 (WorldChunk) [global]
+static jmethodID g_wc_block_entities_mid = nullptr; // WorldChunk.getBlockEntities() -> Map
+static jclass g_java_map_class = nullptr;         // java/util/Map [global]
+static jmethodID g_map_values_mid = nullptr;      // Map.values() -> Collection
+static jclass g_java_collection_class = nullptr;  // java/util/Collection [global]
+static jmethodID g_collection_iterator_mid = nullptr; // Collection.iterator()
 static jclass g_block_entity_class = nullptr;   // class_2586 (BlockEntity) [global]
 static jmethodID g_be_get_pos_mid = nullptr;    // method_11016
 static jclass g_block_pos_class = nullptr;      // class_2338 (BlockPos) [global]
@@ -83,16 +92,26 @@ static int64_t now_us()
 		std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// True once the scan path we actually use is fully resolved: either the
+// 1.21.10 world-level set, or the 1.21.4 per-chunk walk (chunk getter + map).
+static bool jni_ready()
+{
+	if (!g_cached) return false;
+	if (g_block_entities_field) return true;
+	return g_world_get_chunk_mid && g_wc_block_entities_mid &&
+		g_map_values_mid && g_collection_iterator_mid;
+}
+
 static bool resolve_jni(JNIEnv* env)
 {
-	if (g_cached && g_block_entities_field) return true;
+	if (jni_ready()) return true;
 
 	// A class lookup can fail transiently (first frames after the world
 	// loads). Latching that failure would leave StorageESP dead for the whole
 	// session, so retry — but at most once a second.
 	int64_t attempt = now_us();
 	if (g_resolve_attempt_us && attempt - g_resolve_attempt_us < 1000000)
-		return g_cached && g_block_entities_field;
+		return jni_ready();
 	g_resolve_attempt_us = attempt;
 
 	jclass local = nullptr;
@@ -115,6 +134,41 @@ static bool resolve_jni(JNIEnv* env)
 			sdk::mappings::client_world_block_entities_name,
 			sdk::mappings::client_world_block_entities_sig);
 		if (env->ExceptionCheck()) env->ExceptionClear();
+
+		// 1.21.4 has no world-level block entity set; fall back to walking the
+		// loaded chunks and reading each WorldChunk's own map.
+		g_world_get_chunk_mid = env->GetMethodID(g_client_world_class,
+			sdk::mappings::world_get_chunk_ii_name, sdk::mappings::world_get_chunk_ii_sig);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+	}
+
+	if (!g_block_entities_field)
+	{
+		local = sdk::classloader::find_class(env, sdk::mappings::world_chunk_class_sig);
+		promote(g_world_chunk_class);
+		if (g_world_chunk_class)
+		{
+			g_wc_block_entities_mid = env->GetMethodID(g_world_chunk_class,
+				sdk::mappings::world_chunk_block_entities_name,
+				sdk::mappings::world_chunk_block_entities_sig);
+			if (env->ExceptionCheck()) env->ExceptionClear();
+		}
+		local = sdk::classloader::find_class(env, "java/util/Map");
+		promote(g_java_map_class);
+		if (g_java_map_class)
+		{
+			g_map_values_mid = env->GetMethodID(g_java_map_class, "values",
+				"()Ljava/util/Collection;");
+			if (env->ExceptionCheck()) env->ExceptionClear();
+		}
+		local = sdk::classloader::find_class(env, "java/util/Collection");
+		promote(g_java_collection_class);
+		if (g_java_collection_class)
+		{
+			g_collection_iterator_mid = env->GetMethodID(g_java_collection_class, "iterator",
+				"()Ljava/util/Iterator;");
+			if (env->ExceptionCheck()) env->ExceptionClear();
+		}
 	}
 
 	local = sdk::classloader::find_class(env, sdk::mappings::block_entity_class_sig);
@@ -163,34 +217,75 @@ static bool resolve_jni(JNIEnv* env)
 		if (env->ExceptionCheck()) env->ExceptionClear();
 	}
 
-	bool resolved = g_block_entities_field != nullptr;
+	bool resolved = g_block_entities_field != nullptr ||
+		(g_world_get_chunk_mid && g_wc_block_entities_mid &&
+			g_map_values_mid && g_collection_iterator_mid);
 	g_cached = resolved;
+	if (resolved && !g_resolve_logged)
+	{
+		g_resolve_logged = true;
+		rlog::logf("storage_esp: resolved mode=%s",
+			g_block_entities_field ? "set-field" : "chunk-walk");
+	}
 	return resolved;
 }
 
-// A single scan pass over the client's loaded block entities. Returns true on
-// success; false if the JNI state is not usable this frame (safe to retry).
-static bool scan_storage(JNIEnv* env, jobject world, double player_x, double player_y, double player_z,
-	std::vector<storage_block_data>& out)
+// Classify a single block entity and, when it is one of the storages we draw
+// and lies inside the radius, append it to the scan result.
+static void consider_be(JNIEnv* env, jobject be, double player_x, double player_z,
+	double radius, std::vector<storage_block_data>& out)
 {
-	if (!resolve_jni(env)) return false;
-	if (!g_block_entities_field || !g_set_iterator_mid || !g_iter_has_next_mid || !g_iter_next_mid)
-		return false;
-	if (!g_be_get_pos_mid || !g_bp_get_x_mid || !g_bp_get_y_mid || !g_bp_get_z_mid)
+	if (!be) return;
+
+	int type = -1;
+	if (g_ender_be_class && env->IsInstanceOf(be, g_ender_be_class))
+	{
+		if (globals::storage_esp_ender_chest) type = 1;
+	}
+	else if (g_shulker_be_class && env->IsInstanceOf(be, g_shulker_be_class))
+	{
+		if (globals::storage_esp_shulker) type = 2;
+	}
+	else if (g_container_be_class && env->IsInstanceOf(be, g_container_be_class))
+	{
+		if (globals::storage_esp_chest) type = 0;
+	}
+	if (type == -1) return;
+
+	jobject pos = env->CallObjectMethod(be, g_be_get_pos_mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	if (!pos) return;
+
+	int bx = env->CallIntMethod(pos, g_bp_get_x_mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	int by = env->CallIntMethod(pos, g_bp_get_y_mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	int bz = env->CallIntMethod(pos, g_bp_get_z_mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+
+	double dx = (bx + 0.5) - player_x;
+	double dz = (bz + 0.5) - player_z;
+	if (dx * dx + dz * dz <= radius * radius)
+	{
+		storage_block_data data;
+		data.x = bx + 0.5;
+		data.y = by + 0.5;
+		data.z = bz + 0.5;
+		data.type = type;
+		out.push_back(data);
+	}
+	env->DeleteLocalRef(pos);
+}
+
+// Walk every element of a java/util/Collection through its iterator.
+static bool collect_from(JNIEnv* env, jobject collection, double player_x,
+	double player_z, double radius, std::vector<storage_block_data>& out)
+{
+	if (!collection || !g_collection_iterator_mid || !g_iter_has_next_mid || !g_iter_next_mid)
 		return false;
 
-	out.clear();
-	// 32-block horizontal radius filter on the player, so far-away loaded
-	// chests don't light the whole map up.
-	const double radius = 32.0;
-
-	jobject set = env->GetObjectField(world, g_block_entities_field);
+	jobject iter = env->CallObjectMethod(collection, g_collection_iterator_mid);
 	if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
-	if (!set) return false;
-
-	jobject iter = env->CallObjectMethod(set, g_set_iterator_mid);
-	if (env->ExceptionCheck()) { env->ExceptionClear(); env->DeleteLocalRef(set); return false; }
-	env->DeleteLocalRef(set);
 	if (!iter) return false;
 
 	while (env->CallBooleanMethod(iter, g_iter_has_next_mid))
@@ -199,52 +294,81 @@ static bool scan_storage(JNIEnv* env, jobject world, double player_x, double pla
 
 		jobject be = env->CallObjectMethod(iter, g_iter_next_mid);
 		if (env->ExceptionCheck()) { env->ExceptionClear(); break; }
-		if (!be) continue;
-
-		int type = -1;
-		if (g_ender_be_class && env->IsInstanceOf(be, g_ender_be_class))
+		if (be)
 		{
-			if (globals::storage_esp_ender_chest) type = 1;
+			consider_be(env, be, player_x, player_z, radius, out);
+			env->DeleteLocalRef(be);
 		}
-		else if (g_shulker_be_class && env->IsInstanceOf(be, g_shulker_be_class))
-		{
-			if (globals::storage_esp_shulker) type = 2;
-		}
-		else if (g_container_be_class && env->IsInstanceOf(be, g_container_be_class))
-		{
-			if (globals::storage_esp_chest) type = 0;
-		}
-
-		if (type != -1)
-		{
-			jobject pos = env->CallObjectMethod(be, g_be_get_pos_mid);
-			if (env->ExceptionCheck()) env->ExceptionClear();
-			if (pos)
-			{
-				int bx = env->CallIntMethod(pos, g_bp_get_x_mid);
-				if (env->ExceptionCheck()) env->ExceptionClear();
-				int by = env->CallIntMethod(pos, g_bp_get_y_mid);
-				if (env->ExceptionCheck()) env->ExceptionClear();
-				int bz = env->CallIntMethod(pos, g_bp_get_z_mid);
-				if (env->ExceptionCheck()) env->ExceptionClear();
-
-				double dx = (bx + 0.5) - player_x;
-				double dz = (bz + 0.5) - player_z;
-				if (dx * dx + dz * dz <= radius * radius)
-				{
-					storage_block_data data;
-					data.x = bx + 0.5;
-					data.y = by + 0.5;
-					data.z = bz + 0.5;
-					data.type = type;
-					out.push_back(data);
-				}
-				env->DeleteLocalRef(pos);
-			}
-		}
-		env->DeleteLocalRef(be);
 	}
 	env->DeleteLocalRef(iter);
+	return true;
+}
+
+// A single scan pass over the client's loaded block entities. Returns true on
+// success; false if the JNI state is not usable this frame (safe to retry).
+static bool scan_storage(JNIEnv* env, jobject world, double player_x, double player_y, double player_z,
+	std::vector<storage_block_data>& out)
+{
+	if (!resolve_jni(env)) return false;
+	if (!g_be_get_pos_mid || !g_bp_get_x_mid || !g_bp_get_y_mid || !g_bp_get_z_mid)
+		return false;
+
+	out.clear();
+	// 32-block horizontal radius filter on the player, so far-away loaded
+	// chests don't light the whole map up.
+	const double radius = 32.0;
+
+	// 1.21.10: one world-wide set of block entities.
+	if (g_block_entities_field)
+	{
+		if (!g_set_iterator_mid || !g_iter_has_next_mid || !g_iter_next_mid)
+			return false;
+
+		jobject set = env->GetObjectField(world, g_block_entities_field);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+		if (!set) return false;
+
+		bool ok = collect_from(env, set, player_x, player_z, radius, out);
+		env->DeleteLocalRef(set);
+		return ok;
+	}
+
+	// 1.21.4: walk the loaded chunks around the player and read each chunk's map.
+	if (!g_world_get_chunk_mid || !g_wc_block_entities_mid || !g_map_values_mid ||
+		!g_collection_iterator_mid || !g_iter_has_next_mid || !g_iter_next_mid)
+		return false;
+
+	int pcx = static_cast<int>(std::floor(player_x / 16.0));
+	int pcz = static_cast<int>(std::floor(player_z / 16.0));
+	int chunk_radius = static_cast<int>(std::ceil(radius / 16.0));
+
+	for (int cz = pcz - chunk_radius; cz <= pcz + chunk_radius; ++cz)
+	{
+		for (int cx = pcx - chunk_radius; cx <= pcx + chunk_radius; ++cx)
+		{
+			jobject chunk = env->CallObjectMethod(world, g_world_get_chunk_mid, cx, cz);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); continue; }
+			if (!chunk) continue;
+
+			jobject map = env->CallObjectMethod(chunk, g_wc_block_entities_mid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); map = nullptr; }
+
+			jobject values = nullptr;
+			if (map)
+			{
+				values = env->CallObjectMethod(map, g_map_values_mid);
+				if (env->ExceptionCheck()) { env->ExceptionClear(); values = nullptr; }
+			}
+
+			if (values)
+			{
+				collect_from(env, values, player_x, player_z, radius, out);
+				env->DeleteLocalRef(values);
+			}
+			if (map) env->DeleteLocalRef(map);
+			env->DeleteLocalRef(chunk);
+		}
+	}
 	return true;
 }
 

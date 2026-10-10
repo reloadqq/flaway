@@ -22,6 +22,9 @@ std::mutex g_mu;
 
 int g_fd = -1;
 bool g_opened = false;
+// Set by disable() at unhook: the file was wiped and must not come back.
+// Cleared by enable() on the next inject.
+bool g_disabled = false;
 unsigned long long g_frame = 0;
 long long g_t0 = -1;
 long long g_bucket_ms = 0;
@@ -43,6 +46,7 @@ long long mono_ms() {
 
 void ensure_open() {
 	// Called with g_mu held.
+	if (g_disabled) return;
 	if (g_opened) return;
 	g_opened = true;
 	char path[512];
@@ -152,6 +156,23 @@ void frame() {
 	long long now = mono_ms();
 	if (g_t0 < 0) g_t0 = now;
 	refill(now);
+}
+
+void disable() {
+	std::lock_guard<std::mutex> lk(g_mu);
+	// Close before the wipe so flaway_render.txt loses its last descriptor
+	// and the unlink in artifacts::hide() removes a file nobody holds.
+	if (g_fd >= 0) close(g_fd);
+	g_fd = -1;
+	g_opened = false;
+	g_disabled = true;
+}
+
+void enable() {
+	std::lock_guard<std::mutex> lk(g_mu);
+	g_disabled = false;
+	g_opened = false;
+	g_fd = -1;
 }
 
 unsigned long long frame_no() { return g_frame; }

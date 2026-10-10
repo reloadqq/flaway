@@ -13,6 +13,7 @@ flaway/modules/triggerbot/triggerbot.o: \
  flaway/modules/triggerbot/../../flaway.h \
  flaway/modules/triggerbot/../../globals/globals.h \
  flaway/modules/triggerbot/../../utils/logger.h \
+ flaway/modules/triggerbot/../../utils/rlog.h \
  flaway/modules/triggerbot/../friend_manager/friend_manager.h \
  sdk/minecraft/minecraft.h sdk/minecraft/entity/entity.h \
  sdk/classloader.h flaway/modules/triggerbot/../../hooks/Hook.h \
@@ -39,6 +40,7 @@ sdk/../utils/jnihook-master/include/jnihook.h:
 flaway/modules/triggerbot/../../flaway.h:
 flaway/modules/triggerbot/../../globals/globals.h:
 flaway/modules/triggerbot/../../utils/logger.h:
+flaway/modules/triggerbot/../../utils/rlog.h:
 flaway/modules/triggerbot/../friend_manager/friend_manager.h:
 sdk/minecraft/minecraft.h:
 sdk/minecraft/entity/entity.h:

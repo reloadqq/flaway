@@ -269,14 +269,16 @@ namespace sdk
 		inline constexpr const char* entity_velocity_name = "field_18276";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#velocity
 		inline constexpr const char* entity_velocity_sig = "Lnet/minecraft/class_243;";
-		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#handleFallDamage(double,float,net.minecraft.entity.damage.DamageSource)
+		// https://maven.fabricmc.net/docs/yarn-1.21.4+build.8/net/minecraft/entity/Entity.html#handleFallDamage(float,float,net.minecraft.entity.damage.DamageSource)
 		inline constexpr const char* entity_handle_fall_damage_name = "method_5747";
-		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#handleFallDamage(double,float,net.minecraft.entity.damage.DamageSource)
-		inline constexpr const char* entity_handle_fall_damage_sig = "(DFLnet/minecraft/class_1282;)Z";
-		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#fallDistance
+		// 1.21.4 takes floats; 1.21.10 widened the first one to double.
+		inline constexpr const char* entity_handle_fall_damage_sig = "(FFLnet/minecraft/class_1282;)Z";
+		inline constexpr const char* entity_handle_fall_damage_sig_legacy = "(DFLnet/minecraft/class_1282;)Z";
+		// https://maven.fabricmc.net/docs/yarn-1.21.4+build.8/net/minecraft/entity/Entity.html#fallDistance
 		inline constexpr const char* entity_fall_distance_name = "field_6017";
-		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/Entity.html#fallDistance
-		inline constexpr const char* entity_fall_distance_sig = "D";
+		// 1.21.4: float. Probed first - GetFieldID with a wrong type returns null.
+		inline constexpr const char* entity_fall_distance_sig = "F";
+		inline constexpr const char* entity_fall_distance_sig_legacy = "D";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/player/PlayerEntity.html#attack(net.minecraft.entity.Entity)
 		inline constexpr const char* player_attack_name = "method_7324";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/entity/player/PlayerEntity.html#attack(net.minecraft.entity.Entity)
@@ -362,9 +364,18 @@ namespace sdk
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/world/ClientWorld.html
 		inline constexpr const char* client_world_class_sig = "net/minecraft/class_638";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/world/ClientWorld.html#blockEntities
+		// 1.21.10 only - the field does not exist on 1.21.4, which falls back to
+		// the per-chunk WorldChunk.getBlockEntities() maps below.
 		inline constexpr const char* client_world_block_entities_name = "field_60919";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/world/ClientWorld.html#blockEntities
 		inline constexpr const char* client_world_block_entities_sig = "Ljava/util/Set;";
+		// World.getChunk(int, int) -> WorldChunk or null when not loaded (1.21.4)
+		inline constexpr const char* world_get_chunk_ii_name = "method_8497";
+		inline constexpr const char* world_get_chunk_ii_sig = "(II)Lnet/minecraft/class_2818;";
+		inline constexpr const char* world_chunk_class_sig = "net/minecraft/class_2818";
+		// WorldChunk.getBlockEntities() -> Map<BlockPos, BlockEntity> (1.21.4)
+		inline constexpr const char* world_chunk_block_entities_name = "method_12214";
+		inline constexpr const char* world_chunk_block_entities_sig = "()Ljava/util/Map;";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/block/entity/BlockEntity.html
 		inline constexpr const char* block_entity_class_sig = "net/minecraft/class_2586";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/block/entity/BlockEntity.html#getPos()
@@ -517,17 +528,48 @@ namespace sdk
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/option/GameOptions.html#gamma
 		inline constexpr const char* game_options_gamma_name = "field_1840";
 		inline constexpr const char* game_options_gamma_sig = "Lnet/minecraft/class_7172;";
+		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/option/GameOptions.html#sprintKey
+		inline constexpr const char* game_options_sprint_key_name = "field_1867";
+		inline constexpr const char* game_options_sprint_key_sig = "Lnet/minecraft/class_304;";
+		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/option/KeyBinding.html
+		inline constexpr const char* keybinding_class_sig = "net/minecraft/class_304";
+		inline constexpr const char* keybinding_bound_key_name = "field_1655";
+		inline constexpr const char* keybinding_bound_key_sig = "Lnet/minecraft/class_3675$class_306;";
+		// net/minecraft/client/util/InputUtil$Key - `code` is the GLFW keycode of the binding
+		inline constexpr const char* input_util_key_class_sig = "net/minecraft/class_3675$class_306";
+		inline constexpr const char* input_util_key_code_name = "field_1665";
+		inline constexpr const char* input_util_key_code_sig = "I";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/option/SimpleOption.html
 		inline constexpr const char* simple_option_class_sig = "net/minecraft/class_7172";
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/client/option/SimpleOption.html#value
 		inline constexpr const char* simple_option_value_name = "field_37868";
 		inline constexpr const char* simple_option_value_sig = "Ljava/lang/Object;";
-		// EntityRenderer.renderLabelIfPresent = method_3571 (verified against 1.21.10
-		// client-intermediary bytecode: renderName method_3569 casts its first arg to
-		// class_11964 and delegates here, so suppressing method_3571 hides all labels).
-		inline constexpr const char* entity_renderer_class_sig = "net/minecraft/class_828";
-		inline constexpr const char* render_label_name = "method_3571";
-		inline constexpr const char* render_label_sig = "(Lnet/minecraft/class_11964;Lnet/minecraft/class_4587;Lnet/minecraft/class_11659;Lnet/minecraft/class_12075;)V";
+		// net/minecraft/client/render/BackgroundRenderer (1.21.4) /
+		// net/minecraft/client/render/fog/FogRenderer (1.21.10+), intermediary class_758.
+		inline constexpr const char* fog_renderer_class_sig = "net/minecraft/class_758";
+		// BackgroundRenderer.getFogColor(Camera, float, World, int, float) -> Vector4f
+		inline constexpr const char* fog_get_color_name = "method_62185";
+		inline constexpr const char* fog_get_color_sig = "(Lnet/minecraft/class_4184;FLnet/minecraft/class_638;IF)Lorg/joml/Vector4f;";
+		// 1.21.10+ appends a trailing boolean (thick) argument.
+		inline constexpr const char* fog_get_color_sig_legacy = "(Lnet/minecraft/class_4184;FLnet/minecraft/class_638;IFZ)Lorg/joml/Vector4f;";
+		// BackgroundRenderer.applyFog(Camera, FogType, Vector4f fogColor, float, boolean, float) -> Fog
+		// The Fog record stores color.x/y/z/w; RenderSystem.setShaderFog hands it to
+		// ShaderProgram, which uploads it as the FogColor uniform of every fogged shader.
+		inline constexpr const char* fog_apply_record_name = "method_3211";
+		inline constexpr const char* fog_apply_record_sig = "(Lnet/minecraft/class_4184;Lnet/minecraft/class_758$class_4596;Lorg/joml/Vector4f;FZF)Lnet/minecraft/class_9958;";
+		// 1.21.10 instead writes the fog uniform block straight into a ByteBuffer.
+		inline constexpr const char* fog_apply_ubo_name = "method_71110";
+		inline constexpr const char* fog_apply_ubo_sig = "(Ljava/nio/ByteBuffer;ILorg/joml/Vector4f;FFFFFF)V";
+		inline constexpr const char* vector4f_class_sig = "org/joml/Vector4f";
+		// EntityRenderer.renderLabelIfPresent (class_897 in both 1.21.4 and 1.21.10;
+		// class_828 is EnchantingTableBlockEntityRenderer, NOT the entity renderer).
+		inline constexpr const char* entity_renderer_class_sig = "net/minecraft/class_897";
+		// 1.21.4: (EntityRenderState, Text, MatrixStack, VertexConsumerProvider, int)
+		inline constexpr const char* render_label_name = "method_3926";
+		inline constexpr const char* render_label_sig = "(Lnet/minecraft/class_10017;Lnet/minecraft/class_2561;Lnet/minecraft/class_4587;Lnet/minecraft/class_4597;I)V";
+		// 1.21.10: the label text moved into the render state (4 args, same method id).
+		inline constexpr const char* render_label_name_legacy = "method_3926";
+		inline constexpr const char* render_label_sig_legacy = "(Lnet/minecraft/class_10017;Lnet/minecraft/class_4587;Lnet/minecraft/class_11659;Lnet/minecraft/class_12075;)V";
 
 		// BaseFinder — block-world access (all verified against yarn-1.21.10+build.1)
 		// https://maven.fabricmc.net/docs/yarn-1.21.10+build.1/net/minecraft/world/WorldView.html
@@ -553,9 +595,14 @@ namespace sdk
 		inline constexpr const char* block_state_is_replaceable_sig = "()Z";
 		// Block identity: Block.getTranslationKey() = method_9539, fallback cached field translationKey = field_10642
 		inline constexpr const char* block_class_sig = "net/minecraft/class_2248";
-		inline constexpr const char* block_get_translation_key_name = "method_9539";
+		// AbstractBlock.getTranslationKey (1.21.4; looked up on Block, GetMethodID
+		// walks the superclass chain). 1.21.10 used method_9539 instead.
+		inline constexpr const char* block_get_translation_key_name = "method_63499";
 		inline constexpr const char* block_get_translation_key_sig = "()Ljava/lang/String;";
-		inline constexpr const char* block_translation_key_field = "field_10642";
+		inline constexpr const char* block_get_translation_key_name_legacy = "method_9539";
+		// AbstractBlock.translationKey (1.21.4); 1.21.10 used field_10642.
+		inline constexpr const char* block_translation_key_field = "field_54005";
+		inline constexpr const char* block_translation_key_field_legacy = "field_10642";
 		inline constexpr const char* block_translation_key_sig = "Ljava/lang/String;";
 		// BaseFinder — click mode (place block at found position)
 		inline constexpr const char* vec3d_ctor_sig = "(DDD)V";
@@ -613,6 +660,195 @@ namespace sdk
 		inline constexpr const char* entry_get_profile_name = "method_2966";
 		inline constexpr const char* entry_get_profile_sig = "()Lcom/mojang/authlib/GameProfile;";
 
+		// --- Better Minecraft (animated TAB / chat / zoom / smooth F5) ---
+		// InGameHud.renderPlayerList(DrawContext, TickCounter): the single
+		// funnel for the vanilla TAB list (gate + PlayerListHud.render inside).
+		inline constexpr const char* ingamehud_render_player_list_name = "method_55804";
+		inline constexpr const char* ingamehud_render_player_list_sig =
+			"(Lnet/minecraft/class_332;Lnet/minecraft/class_9779;)V";
+		// ChatHud.render(DrawContext, int, int, int, boolean) — covers BOTH
+		// vanilla call paths: InGameHud.renderChat and ChatScreen.render,
+		// which calls ChatHud.render directly while the chat box is open.
+		inline constexpr const char* chat_hud_render_name = "method_1805";
+		inline constexpr const char* chat_hud_render_sig = "(Lnet/minecraft/class_332;IIIZ)V";
+		// ChatHud.messages: List<ChatHudLine>, newest at index 0, cap 100.
+		inline constexpr const char* chat_hud_messages_name = "field_2061";
+		inline constexpr const char* chat_hud_messages_sig = "Ljava/util/List;";
+		// ChatHudLine record accessors (component id -> comp_XXX at runtime).
+		inline constexpr const char* chat_hud_line_class_sig = "net/minecraft/class_303";
+		inline constexpr const char* chat_hud_line_content_name = "comp_893";
+		inline constexpr const char* chat_hud_line_content_sig = "()Lnet/minecraft/class_2561;";
+		// Camera.update(WorldReadView, Entity, boolean thirdPerson, boolean
+		// inverse, float tickDelta) — 1.21.4..1.21.10 use class_1922, 1.21.11
+		// swapped the first parameter to class_1937.
+		inline constexpr const char* camera_update_name = "method_19321";
+		inline constexpr const char* camera_update_sig =
+			"(Lnet/minecraft/class_1922;Lnet/minecraft/class_1297;ZZF)V";
+		inline constexpr const char* camera_update_sig_legacy =
+			"(Lnet/minecraft/class_1937;Lnet/minecraft/class_1297;ZZF)V";
+		// Camera.setPos(double,double,double) / clipToSpace / moveBy — used to
+		// replay the vanilla third-person placement at an animated distance.
+		inline constexpr const char* camera_set_pos_name = "method_19327";
+		inline constexpr const char* camera_set_pos_sig = "(DDD)V";
+		inline constexpr const char* camera_clip_to_space_name = "method_19318";
+		inline constexpr const char* camera_clip_to_space_sig = "(F)F";
+		inline constexpr const char* camera_move_by_name = "method_19324";
+		inline constexpr const char* camera_move_by_sig = "(FFF)V";
+		// Entity.getCameraPosVec(float tickDelta) — interpolated eye position.
+		inline constexpr const char* entity_get_camera_pos_name = "method_5836";
+		inline constexpr const char* entity_get_camera_pos_sig = "(F)Lnet/minecraft/class_243;";
+		// ClientPlayNetworkHandler.getListedPlayerListEntries() -> Collection
+		inline constexpr const char* network_get_listed_entries_name = "method_45732";
+		inline constexpr const char* network_get_listed_entries_sig = "()Ljava/util/Collection;";
+		// GameOptions.mouseSensitivity (SimpleOption holding a boxed Double)
+		inline constexpr const char* game_options_sensitivity_name = "field_1843";
+		inline constexpr const char* game_options_sensitivity_sig = "Lnet/minecraft/class_7172;";
+		inline constexpr const char* game_options_player_list_key_name = "field_1907";
+		inline constexpr const char* game_options_player_list_key_sig = "Lnet/minecraft/class_304;";
+		// SimpleOption.value (Object) / KeyBinding.isPressed()
+		inline constexpr const char* key_binding_class_sig = "net/minecraft/class_304";
+		inline constexpr const char* key_binding_is_pressed_name = "method_1434";
+		inline constexpr const char* key_binding_is_pressed_sig = "()Z";
+		// PlayerInventory.changeCount — bumped on any inventory change, used to
+		// re-read the 41 visible slots only when something actually changed.
+		inline constexpr const char* inventory_change_count_name = "field_7542";
+		inline constexpr const char* inventory_change_count_sig = "I";
+		// GameRenderer (holds getFov) and MinecraftClient.currentScreen — used
+		// to detect an open ChatScreen for the chat overlay.
+		inline constexpr const char* game_renderer_class_sig = "net/minecraft/class_757";
+		inline constexpr const char* minecraftclient_screen_field = "field_1755";
+		inline constexpr const char* minecraftclient_screen_sig = "Lnet/minecraft/class_437;";
+
+		// --- Ports of vanilla-side animations (ChatAnimation / TIA / SmoothGUI) ---
+		// All verified against yarn-1.21.10+build.1 mappings + decompiled 1.21.10 client.
+
+		// ChatHud.addMessage(Text, MessageSignature, GuiMessageTag) — every
+		// incoming message funnels through it (method_1812 delegates to it).
+		inline constexpr const char* chat_hud_add_message3_name = "method_44811";
+		inline constexpr const char* chat_hud_add_message3_sig =
+			"(Lnet/minecraft/class_2561;Lnet/minecraft/class_7469;Lnet/minecraft/class_7591;)V";
+		// ChatHud.getLineHeight()
+		inline constexpr const char* chat_hud_line_height_name = "method_44752";
+		inline constexpr const char* chat_hud_line_height_sig = "()I";
+		// ChatHud.scrolledLines — stack displacement is 0 while scrolled back.
+		inline constexpr const char* chat_hud_scrolled_name = "field_2066";
+		inline constexpr const char* chat_hud_scrolled_sig = "I";
+		// Per-line render lambdas of ChatHud.forEachVisibleLine; both take the
+		// visible line + line index + alpha as their trailing arguments.
+		inline constexpr const char* chat_line_bg_name = "method_71991";
+		inline constexpr const char* chat_line_bg_sig =
+			"(ILnet/minecraft/class_332;FIIILnet/minecraft/class_303$class_7590;IF)V";
+		inline constexpr const char* chat_line_text_name = "method_71992";
+		inline constexpr const char* chat_line_text_sig =
+			"(Lnet/minecraft/class_332;IFFIIIIILnet/minecraft/class_303$class_7590;IF)V";
+		// ChatHudLine.Visible (record) — addedTime is the tick it was created at.
+		inline constexpr const char* chat_visible_class_sig = "net/minecraft/class_303$class_7590";
+		inline constexpr const char* chat_visible_added_time_name = "comp_895";
+		inline constexpr const char* chat_visible_added_time_sig = "I";
+		// 1.21.4 fallback: no per-line lambdas; chat fade lives in the static
+		// ChatHud.getMessageOpacityMultiplier(int) — vanilla calls it with the
+		// line age (ticks) and multiplies 255 by the result.
+		inline constexpr const char* chat_hud_opacity_name = "method_19348";
+		inline constexpr const char* chat_hud_opacity_sig = "(I)D";
+
+		// DrawContext.getMatrices() -> org.joml.Matrix3x2fStack (GUI is 2D
+		// since 1.21.6); the JOML names are not remapped.
+		inline constexpr const char* draw_context_class_sig = "net/minecraft/class_332";
+		inline constexpr const char* draw_context_matrices_name = "method_51448";
+		inline constexpr const char* draw_context_matrices_sig = "()Lorg/joml/Matrix3x2fStack;";
+		inline constexpr const char* matrix_stack_class_sig = "org/joml/Matrix3x2fStack";
+		inline constexpr const char* matrix_push_name = "pushMatrix";
+		inline constexpr const char* matrix_push_sig = "()Lorg/joml/Matrix3x2fStack;";
+		inline constexpr const char* matrix_pop_name = "popMatrix";
+		inline constexpr const char* matrix_pop_sig = "()Lorg/joml/Matrix3x2fStack;";
+		inline constexpr const char* matrix_translate_name = "translate";
+		inline constexpr const char* matrix_translate_sig = "(FF)Lorg/joml/Matrix3x2f;";
+		inline constexpr const char* matrix_scale_name = "scale";
+		inline constexpr const char* matrix_scale_sig = "(FF)Lorg/joml/Matrix3x2f;";
+
+		// 1.21.4 and older: getMatrices() returns PoseStack (class_4587) and
+		// push/pop/translate/scale are intermediary-mapped PoseStack methods.
+		inline constexpr const char* draw_context_matrices_sig_legacy =
+			"()Lnet/minecraft/class_4587;";
+		inline constexpr const char* matrix_stack_class_sig_legacy =
+			"net/minecraft/class_4587";
+		inline constexpr const char* matrix_push_name_legacy = "method_22903";
+		inline constexpr const char* matrix_push_sig_legacy = "()V";
+		inline constexpr const char* matrix_pop_name_legacy = "method_22909";
+		inline constexpr const char* matrix_pop_sig_legacy = "()V";
+		inline constexpr const char* matrix_translate_name_legacy = "method_46416";
+		inline constexpr const char* matrix_translate_sig_legacy = "(FFF)V";
+		inline constexpr const char* matrix_scale_name_legacy = "method_22905";
+		inline constexpr const char* matrix_scale_sig_legacy = "(FFF)V";
+
+		// SmoothGUI: MinecraftClient.setScreen(Screen) + Screen render entry
+		// (renderWithTooltip calls renderBackground then render) and the dark
+		// in-game gradient (renderInGameBackground, mojmap renderTransparentBackground).
+		inline constexpr const char* minecraft_set_screen_name = "method_1507";
+		inline constexpr const char* minecraft_set_screen_sig = "(Lnet/minecraft/class_437;)V";
+		// world = ClientWorld field (field_1769 is worldRenderer!). Same in
+		// 1.21.4 and 1.21.10 — intermediary ids are stable across releases.
+		inline constexpr const char* minecraft_world_field = "field_1687";
+		inline constexpr const char* minecraft_world_sig = "Lnet/minecraft/class_638;";
+		inline constexpr const char* minecraft_player_field = "field_1724";
+		inline constexpr const char* minecraft_player_sig = "Lnet/minecraft/class_746;";
+		inline constexpr const char* screen_render_name = "method_47413";
+		inline constexpr const char* screen_render_sig = "(Lnet/minecraft/class_332;IIF)V";
+		inline constexpr const char* screen_transparent_bg_name = "method_52752";
+		inline constexpr const char* screen_transparent_bg_sig = "(Lnet/minecraft/class_332;)V";
+		inline constexpr const char* screen_render_bg_name = "method_25420";
+		inline constexpr const char* screen_render_bg_sig = "(Lnet/minecraft/class_332;IIF)V";
+		inline constexpr const char* screen_children_field = "field_22786";
+		inline constexpr const char* screen_children_sig = "Ljava/util/List;";
+		inline constexpr const char* screen_width_field = "field_22789";
+		inline constexpr const char* screen_height_field = "field_22790";
+		inline constexpr const char* fill_gradient_name = "method_25296";
+		inline constexpr const char* fill_gradient_sig = "(IIIIII)V";
+		// AbstractSelectionList — screens containing one are not animated.
+		inline constexpr const char* entry_list_class_sig = "net/minecraft/class_350";
+
+		// PlayerListHud (TAB panel) — smooth slide-down animation.
+		inline constexpr const char* player_list_hud_class_sig = "net/minecraft/class_355";
+		inline constexpr const char* player_list_hud_render_name = "method_1919";
+		inline constexpr const char* player_list_hud_render_sig =
+			"(Lnet/minecraft/class_332;ILnet/minecraft/class_269;Lnet/minecraft/class_266;)V";
+		inline constexpr const char* player_list_hud_visible_field = "field_2158";
+		inline constexpr const char* player_list_hud_visible_sig = "Z";
+		// InGameHud.playerListHud field (to read visible flag from the hud).
+		inline constexpr const char* ingamehud_player_list_field = "field_2015";
+		inline constexpr const char* ingamehud_player_list_sig = "Lnet/minecraft/class_355;";
+
+		// Tiny Item Animations: HandledScreen.drawSlot / cursor-stack draw,
+		// AbstractContainerMenu.onSlotClick trigger + slot coordinates.
+		inline constexpr const char* hs_draw_slot_name = "method_2385";
+		inline constexpr const char* hs_draw_slot_sig =
+			"(Lnet/minecraft/class_332;Lnet/minecraft/class_1735;)V";
+		inline constexpr const char* hs_draw_cursor_name = "method_2382";
+		inline constexpr const char* hs_draw_cursor_sig =
+			"(Lnet/minecraft/class_332;Lnet/minecraft/class_1799;IILjava/lang/String;)V";
+		inline constexpr const char* menu_slots_field = "field_7761";
+		inline constexpr const char* menu_slots_sig = "Ljava/util/List;";
+		inline constexpr const char* slot_x_field = "field_7873";
+		inline constexpr const char* slot_y_field = "field_7872";
+		inline constexpr const char* slot_coord_sig = "I";
+		inline constexpr const char* draw_item_name = "method_51427";
+		inline constexpr const char* draw_item_sig = "(Lnet/minecraft/class_1799;II)V";
+		inline constexpr const char* draw_item_z_name = "method_51428";
+		inline constexpr const char* draw_item_z_sig = "(Lnet/minecraft/class_1799;III)V";
+		inline constexpr const char* draw_item_noent_z_name = "method_55231";
+		inline constexpr const char* draw_item_noent_z_sig = "(Lnet/minecraft/class_1799;III)V";
+		inline constexpr const char* draw_item_noent_name = "method_51445";
+		inline constexpr const char* draw_item_noent_sig = "(Lnet/minecraft/class_1799;II)V";
+
+		// Custom menu background: TitleScreen + resource-pack reload screen.
+		inline constexpr const char* title_screen_class_sig = "net/minecraft/class_442";
+		// ProgressScreen (shown during resource-pack reload) — intermediary
+		// class_435, same in 1.21.4 and 1.21.10.
+		inline constexpr const char* progress_screen_class_sig = "net/minecraft/class_435";
+		// Screen.render — overridden by TitleScreen and ProgressScreen.
+		// (method_25394, DrawContext, mouseX, mouseY, delta)
+		inline constexpr const char* screen_render_base_name = "method_25394";
+		inline constexpr const char* screen_render_base_sig = "(Lnet/minecraft/class_332;IIF)V";
 	}
 };
 

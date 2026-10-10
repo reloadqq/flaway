@@ -73,9 +73,13 @@ SRCS = \
     flaway/modules/autosprint/autosprint.cpp \
     flaway/modules/fullbright/fullbright.cpp \
     flaway/modules/fog/fog.cpp \
+    flaway/modules/better_minecraft/better_minecraft.cpp \
+    flaway/modules/better_minecraft/bm_hooks.cpp \
+    flaway/modules/better_minecraft/menu_bg.cpp \
     flaway/modules/friend_manager/friend_manager.cpp \
     flaway/modules/chat_command/chat_command.cpp \
-    flaway/utils/crash_dump.cpp
+    flaway/utils/crash_dump.cpp \
+    flaway/utils/artifacts.cpp
 
 # Linux platform sources
 LINUX_SRCS = \

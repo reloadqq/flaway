@@ -1,5 +1,7 @@
 #include "chat_command.h"
 #include "../../flaway.h"
+#include "../../utils/rlog.h"
+#include "../../utils/chat_notify.h"
 #include "../friend_manager/friend_manager.h"
 #include <sdk/mappings/mappings.hpp>
 #include <sdk/classloader.h>
@@ -57,7 +59,8 @@ static bool handle_friend_command(const std::string& msg)
 
 	if (rest.empty())
 	{
-		fprintf(stderr, "[chat_command] .friend usage: .friend <add|remove|list|clear> [nick]\n"); fflush(stderr);
+		rlog::logf("bm: .friend usage");
+		chat_notify::add("§7[flaway] §f.friend <add|remove|list|clear> [nick]");
 		return true;
 	}
 
@@ -78,44 +81,44 @@ static bool handle_friend_command(const std::string& msg)
 	{
 		if (arg.empty())
 		{
-			fprintf(stderr, "[chat_command] usage: .friend add <nick>\n"); fflush(stderr);
+			chat_notify::add("§7[flaway] §fUsage: .friend add <nick>");
 			return true;
 		}
 		flaway::modules::friend_manager::add(arg);
-		fprintf(stderr, "[chat_command] Friend added: %s\n", arg.c_str()); fflush(stderr);
+		chat_notify::add("§a[flaway] Friend added: " + arg);
+		rlog::logf("bm: friend add %s", arg.c_str());
 		return true;
 	}
 	else if (sub_cmd == "remove" || sub_cmd == "del" || sub_cmd == "delete")
 	{
 		if (arg.empty())
 		{
-			fprintf(stderr, "[chat_command] usage: .friend remove <nick>\n"); fflush(stderr);
+			chat_notify::add("§7[flaway] §fUsage: .friend remove <nick>");
 			return true;
 		}
 		flaway::modules::friend_manager::remove(arg);
-		fprintf(stderr, "[chat_command] Friend removed: %s\n", arg.c_str()); fflush(stderr);
+		chat_notify::add("§c[flaway] Friend removed: " + arg);
+		rlog::logf("bm: friend remove %s", arg.c_str());
 		return true;
 	}
 	else if (sub_cmd == "list")
 	{
 		const auto friends = flaway::modules::friend_manager::get_list();
-		fprintf(stderr, "[chat_command] Friends list (%zu):\n", friends.size()); fflush(stderr);
+		chat_notify::add("§e[flaway] Friends (" + std::to_string(friends.size()) + "):");
 		for (const auto& f : friends)
 		{
-			// `f` is only used by the (no-op under no_log.h) fprintf below.
-			(void)f.c_str();
-			fprintf(stderr, "[chat_command]   - %s\n", f.c_str()); fflush(stderr);
+			chat_notify::add("§7  - §f" + f);
 		}
 		return true;
 	}
 	else if (sub_cmd == "clear")
 	{
 		flaway::modules::friend_manager::clear();
-		fprintf(stderr, "[chat_command] Friends list cleared\n"); fflush(stderr);
+		chat_notify::add("§c[flaway] Friends list cleared");
 		return true;
 	}
 
-	fprintf(stderr, "[chat_command] unknown subcommand: %s\n", sub_cmd.c_str()); fflush(stderr);
+	chat_notify::add("§7[flaway] §fUnknown subcommand: " + sub_cmd);
 	return true;
 }
 
@@ -161,6 +164,7 @@ void hkSendMessage(JNIEnv* env, jobject thiz, jstring chatText, jboolean addToHi
 
 			if (!msg.empty() && msg[0] == '.')
 			{
+				rlog::logf("bm: chat cmd '%s'", msg.c_str());
 				if (handle_friend_command(msg))
 				{
 					return;
@@ -188,16 +192,17 @@ bool flaway::modules::chat_command::init()
 		jnihook_result_t result = JNIHook_Init(jvm);
 		if (result != JNIHOOK_OK)
 		{
-			fprintf(stderr, "[chat_command] JNIHook_Init failed: %d\n", result); fflush(stderr);
+			rlog::logf("bm: chat_command JNIHook_Init failed: %d", (int)result);
 			return false;
 		}
 	}
 
- jclass chat_screen_class = sdk::classloader::find_class(env, sdk::mappings::chat_screen_class_sig);
+	// ChatScreen may not be loaded yet when called from flaway::initialize().
+	// Return false so the per-frame caller retries until the class appears.
+	jclass chat_screen_class = sdk::classloader::find_class(env, sdk::mappings::chat_screen_class_sig);
 	if (!chat_screen_class)
 	{
-		fprintf(stderr, "[chat_command] failed to find chat screen class %s\n",
-			sdk::mappings::chat_screen_class_sig); fflush(stderr);
+		rlog::logf("bm: chat_command class not ready yet");
 		return false;
 	}
 
@@ -208,7 +213,7 @@ bool flaway::modules::chat_command::init()
 
 	if (!method_id)
 	{
-		fprintf(stderr, "[chat_command] failed to find sendMessage method\n"); fflush(stderr);
+		rlog::logf("bm: chat_command sendMessage not found");
 		env->DeleteLocalRef(chat_screen_class);
 		return false;
 	}
@@ -218,7 +223,7 @@ bool flaway::modules::chat_command::init()
 	g_chat_screen_class = reinterpret_cast<jclass>(env->NewGlobalRef(chat_screen_class));
 	if (!g_chat_screen_class)
 	{
-		fprintf(stderr, "[chat_command] NewGlobalRef(chat_screen_class) failed\n"); fflush(stderr);
+		rlog::logf("bm: chat_command NewGlobalRef failed");
 		env->DeleteLocalRef(chat_screen_class);
 		return false;
 	}
@@ -226,8 +231,8 @@ bool flaway::modules::chat_command::init()
 	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkSendMessage), &ORIG_send_message);
 	if (result != JNIHOOK_OK || !ORIG_send_message)
 	{
-		fprintf(stderr, "[chat_command] JNIHook_Attach failed: %d orig=%p\n",
-			result, static_cast<void*>(ORIG_send_message)); fflush(stderr);
+		rlog::logf("bm: chat_command attach failed: %d orig=%p", (int)result,
+			static_cast<void*>(ORIG_send_message));
 		env->DeleteGlobalRef(g_chat_screen_class);
 		g_chat_screen_class = nullptr;
 		env->DeleteLocalRef(chat_screen_class);
@@ -238,8 +243,7 @@ bool flaway::modules::chat_command::init()
 
 	g_hooked = true;
 	jnihook_refcount++;
-	fprintf(stderr, "[chat_command] ChatScreen.sendMessage hook installed (orig=%p)\n",
-		static_cast<void*>(ORIG_send_message)); fflush(stderr);
+	rlog::logf("bm: chat_command hook installed (orig=%p)", static_cast<void*>(ORIG_send_message));
 	return true;
 }
 

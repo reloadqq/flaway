@@ -19,6 +19,8 @@
 #include "modules/aimtarget/aimtarget.h"
 #include "modules/friend_manager/friend_manager.h"
 #include "modules/chat_command/chat_command.h"
+#include "modules/fog/fog.h"
+#include "modules/better_minecraft/better_minecraft.h"
 #include <jnihook.h>
 #include "modules/modules.h"
 #include <fcntl.h>
@@ -26,6 +28,8 @@
 #include <atomic>
 #include "flaway/utils/no_log.h"
 #include "flaway/utils/discord_rpc.h"
+#include "flaway/utils/chat_notify.h"
+#include "flaway/utils/artifacts.h"
 
 flaway::instance_t* flaway::instance = nullptr;
 flaway::instance_t flaway::g_instance; // zero-initialized .bss
@@ -104,6 +108,10 @@ bool flaway::instance_t::init(JNIEnv* jenv)
             jenv->GetJavaVM(&jvm);
             fprintf(stderr, "[FLAWAY] jvm=%p\n", (void*)jvm); fflush(stderr);
 
+            // Before anything reads the config: put the data folder back if a
+            // previous unhook stashed it in /tmp, and re-arm the render log.
+            try { flaway::artifacts::restore(); } catch (...) {}
+
             if (!logger::init())
             {
                 logger::log("[flaway] logger init failed");
@@ -179,6 +187,8 @@ void flaway::instance_t::shutdown()
     flaway::modules::reach_hook::shutdown();
     flaway::modules::backtrack_hook::shutdown();
     flaway::modules::nametag_hook::shutdown();
+    flaway::modules::fog::shutdown();
+    flaway::modules::better_minecraft::shutdown();
     flaway::modules::chat_command::shutdown();
     flaway::modules::storage_esp::shutdown();
     flaway::modules::base_finder::shutdown();
@@ -274,12 +284,26 @@ void flaway::instance_t::unhook_all()
         logger::log("[flaway] unhook: set_unhooked");
         Hook::set_unhooked(true);
 
+        // Fog off immediately: the FogRenderer hooks stay bound (gate-only
+        // unload), so tint() only stops because get_unhooked() just flipped.
+        // Done here, before backtrack/render-idle waits, so the tint is gone
+        // on the game's very next frame instead of after ~0.5s of teardown.
+        logger::log("[flaway] unhook: disabling fog");
+        flaway::modules::fog::shutdown();
+        // Restore mouse sensitivity / clear zoom+chat state while JNI is
+        // still alive: the hooks stay bound (gate-only unload).
+        flaway::modules::better_minecraft::shutdown();
+
         // Clear the Discord Rich Presence right away: the worker is joined
         // here, so when this returns Discord no longer shows anything about
         // the game. Must run after set_unhooked so a concurrent frame tick()
         // (which bails on get_unhooked) can not restart it behind our back.
         logger::log("[flaway] unhook: stopping discord rpc");
         discord_rpc::stop();
+
+        // Remove every "[flaway]" line from the local chat HUD so the
+        // chat is left exactly as it was before injection.
+        chat_notify::clear_flaway_messages();
     } catch (...) {
         s_unhook_running = false;
         pthread_mutex_unlock(&mtx);
@@ -336,6 +360,9 @@ void flaway::instance_t::unhook_all()
         teardown_done = true;
         s_unhook_running = false;
         crash_dump::set_phase(14);
+        // Gate-only or not, this was still an unhook: drop the log files and
+        // hide the data folder so nothing flaway-named stays on disk.
+        try { flaway::artifacts::hide(); } catch (...) {}
         return;
     }
 
@@ -521,6 +548,12 @@ void flaway::instance_t::unhook_all()
 
     // Cleanup logger (must be LAST: all logging above has to be visible)
     try { logger::shutdown(); } catch (...) {}
+
+    // Absolute last step: wipe flaway_crash/diag/render.txt from disk and
+    // move ~/.minecraft/flaway to /tmp/<random>. Nothing may log afterwards -
+    // hide() disables the render log first, and the diag/crash writers keep
+    // their fds on the now-unlinked inodes.
+    try { flaway::artifacts::hide(); } catch (...) {}
 
     pthread_mutex_unlock(&mtx);
 }

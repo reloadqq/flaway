@@ -14,6 +14,10 @@ namespace chat_notify {
 // no-op before the client is fully up.
 void add(const std::string& line);
 
+// Remove every local chat line whose text contains "[flaway]" from the
+// ChatHud message list. Called during unhook so the chat is left clean.
+void clear_flaway_messages();
+
 // Append one line to ~/.minecraft/<file_name> (created on first use, 0644).
 // Returns false when the file cannot be opened.
 bool append_file(const std::string& file_name, const std::string& line);

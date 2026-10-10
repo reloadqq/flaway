@@ -17,6 +17,7 @@ flaway/gui/GUI.o: flaway/gui/GUI.cpp flaway/utils/no_log.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jvmti.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
  sdk/minecraft/util/box.h flaway/gui/../modules/fog/fog.h \
+ flaway/gui/../modules/better_minecraft/better_minecraft.h \
  flaway/gui/../modules/storage_esp/storage_esp.h \
  flaway/gui/../modules/base_finder/base_finder.h \
  flaway/gui/../modules/backtrack/backtrack.h \
@@ -53,6 +54,7 @@ sdk/../utils/jnihook-master/include/jnihook.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
 sdk/minecraft/util/box.h:
 flaway/gui/../modules/fog/fog.h:
+flaway/gui/../modules/better_minecraft/better_minecraft.h:
 flaway/gui/../modules/storage_esp/storage_esp.h:
 flaway/gui/../modules/base_finder/base_finder.h:
 flaway/gui/../modules/backtrack/backtrack.h:

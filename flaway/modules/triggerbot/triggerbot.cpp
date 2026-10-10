@@ -2,6 +2,7 @@
 #include "../../flaway.h"
 #include "../../globals/globals.h"
 #include "../../utils/logger.h"
+#include "../../utils/rlog.h"
 #include "../friend_manager/friend_manager.h"
 #include <sdk/minecraft/minecraft.h>
 #include <sdk/minecraft/entity/entity.h>
@@ -11,6 +12,7 @@
 #include "../wtap/wtap.h"
 #include "../autojumpreset/autojumpreset.h"
 #include <cstdlib>
+#include <cmath>
 #include <ctime>
 #include <random>
 #include <platform/linux/x11_helper.h>
@@ -126,6 +128,52 @@ static bool tb_is_using_item(JNIEnv* env, jobject player)
 	return using_item;
 }
 
+static bool tb_touching_water(JNIEnv* env, jobject player)
+{
+	jclass cls = sdk::classloader::find_class(env, sdk::mappings::entity_class_sig);
+	if (!cls) return false;
+	jmethodID mid = env->GetMethodID(cls, sdk::mappings::is_touching_water_name,
+		sdk::mappings::is_touching_water_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	env->DeleteLocalRef(cls);
+	if (!mid) return false;
+	jboolean w = env->CallBooleanMethod(player, mid);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	return w == JNI_TRUE;
+}
+
+static bool tb_is_flying(JNIEnv* env, jobject player)
+{
+	jclass pc = env->GetObjectClass(player);
+	if (!pc) return false;
+	jfieldID abilities_fid = env->GetFieldID(pc, sdk::mappings::abilities_name,
+		sdk::mappings::abilities_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	bool flying = false;
+	if (abilities_fid)
+	{
+		jobject ab = env->GetObjectField(player, abilities_fid);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); ab = nullptr; }
+		if (ab)
+		{
+			jclass ac = env->GetObjectClass(ab);
+			jfieldID fly_fid = ac ? env->GetFieldID(ac, sdk::mappings::fly_name,
+				sdk::mappings::fly_sig) : nullptr;
+			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (fly_fid)
+			{
+				jboolean v = env->GetBooleanField(ab, fly_fid);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+				else flying = v == JNI_TRUE;
+			}
+			if (ac) env->DeleteLocalRef(ac);
+			env->DeleteLocalRef(ab);
+		}
+	}
+	env->DeleteLocalRef(pc);
+	return flying;
+}
+
 static void tb_handle_sprint_before(JNIEnv* env, jobject player)
 {
 	if (globals::triggerbot_sprint_mode == 3) return;
@@ -208,6 +256,36 @@ static void tb_clear_miss_time(JNIEnv* env)
 	env->DeleteLocalRef(mc);
 }
 
+// Delta-style crit window: airborne AND moving down. Returns true only for
+// frames where a hit has a real chance of being a crit server-side.
+static bool tb_crit_allowed(JNIEnv* env)
+{
+	jobject lp = sdk::instance->get_player();
+	if (!lp) return false;
+
+	sdk::entity_client lpec(lp);
+	bool on_ground = lpec.is_on_ground();
+	double fall = lpec.get_fall_distance();
+	double vy = lpec.get_velocity_y();
+	bool water = tb_touching_water(env, lp);
+	bool flying = tb_is_flying(env, lp);
+	env->DeleteLocalRef(lp);
+
+	bool env_ok = !water && !flying;
+	bool falling = fall > 0.05 || vy < -0.08;
+	bool allow = env_ok && !on_ground && falling;
+
+	static uint64_t s_last_log = 0;
+	uint64_t t = now_ms();
+	if (t - s_last_log >= 50ULL)
+	{
+		s_last_log = t;
+		rlog::logf("tb crit og=%d fall=%.2f vy=%.2f water=%d fly=%d allow=%d",
+			(int)on_ground, fall, vy, (int)water, (int)flying, (int)allow);
+	}
+	return allow;
+}
+
 void flaway::modules::triggerbot::run()
 {
 	static bool seeded = false;
@@ -231,8 +309,35 @@ void flaway::modules::triggerbot::run()
 
 	tb_tick_sprint_reset();
 
+	rlog::logf("tb frame enabled=1 jump_only=%d", (int)globals::triggerbot_jump_only);
+
 	auto env = flaway::instance->get_env();
 	if (!env) return;
+
+	// Airborne telemetry, independent of the crosshair: every 50ms while the
+	// player is off the ground, record fallDistance/velocity. This is what
+	// proves the crit window is reachable during a real jump (the old log only
+	// sampled airborne frames that happened to have a target under the crosshair).
+	if (globals::triggerbot_jump_only)
+	{
+		static uint64_t s_last_air_log = 0;
+		uint64_t tnow = now_ms();
+		if (tnow - s_last_air_log >= 50ULL)
+		{
+			jobject lp = sdk::instance->get_player();
+			if (lp)
+			{
+				sdk::entity_client e(lp);
+				if (!e.is_on_ground())
+				{
+					s_last_air_log = tnow;
+					rlog::logf("tb air fall=%.2f vy=%.2f",
+						e.get_fall_distance(), e.get_velocity_y());
+				}
+				env->DeleteLocalRef(lp);
+			}
+		}
+	}
 
 	// Do NOT clear s_sprint_active here: tb_tick_sprint_reset() (called above
 	// every frame) re-presses W once the 60 ms window elapses, and it refuses to
@@ -436,26 +541,30 @@ void flaway::modules::triggerbot::run()
 		}
 	}
 
-	// Crit timing: only swing on the FALLING half of a full jump.
-	// Requires: not on ground AND vertical velocity < -0.25 AND fall > 0.3 blocks.
-	// The lower threshold (0.3) catches normal jump crits without needing
-	// a full 0.9 block fall, while still excluding tiny hops.
+	// Crit gate: swing ONLY while falling after a jump. Never on the ground.
+	//
+	// Condition (Delta AuraUtil.c(), hardened against JNI/mapping misses):
+	//   !isOnGround() && (fallDistance > 0.05 || velocity.y < -0.08)
+	//
+	// - Delta uses fallDistance > 0 && !isOnGround(). The velocity half covers
+	//   the first frames after the apex, where fallDistance has not accumulated
+	//   yet (that is why the log showed fall=0.00 on every airborne frame) and
+	//   it still requires real downward motion, so a stale isOnGround() alone
+	//   can never open the gate while standing.
+	// - On the ground fallDistance is 0 and velocity.y is 0, so BOTH halves
+	//   fail there: this gate is structurally unable to click on the ground.
+	// - Rising half of the jump is intentionally excluded: the server decides
+	//   crits from its own fallDistance, and that is only > 0 while falling.
+	// - Do NOT reset last_attack_ms here: zeroing it every blocked frame made
+	//   timed_out() true on the first allowed frame, so the swing went out at
+	//   ~0 charge (weak, no crit) and the option looked dead.
 	if (globals::triggerbot_jump_only)
 	{
-		jobject lp = sdk::instance->get_player();
-		if (lp)
+		bool crit = tb_crit_allowed(env);
+		if (!crit)
 		{
-			sdk::entity_client lpec(lp);
-			bool on_ground = lpec.is_on_ground();
-			double fall_dist = lpec.get_fall_distance();
-			env->DeleteLocalRef(lp);
-			bool falling = !on_ground && fall_dist > 0.05;
-			if (!falling)
-			{
-				env->DeleteLocalRef(hit_entity);
-				last_attack_ms = 0;
-				return;
-			}
+			env->DeleteLocalRef(hit_entity);
+			return;
 		}
 	}
 
@@ -485,11 +594,22 @@ void flaway::modules::triggerbot::run()
 			env->DeleteLocalRef(player_entity_cls);
 		}
 	}
-	bool charged = progress >= 0.0f
-		? progress >= 0.99f
-		: (last_attack_ms == 0 || now - last_attack_ms >= 625ULL);
-	if (!charged)
+	// Hard deadline: never stay silent longer than a full weapon recharge,
+	// even if the JNI cooldown probe misbehaves on some version.
+	bool timed_out = last_attack_ms == 0 || now - last_attack_ms >= 1000ULL;
+	bool charged = progress >= 0.9f;
+	if (!charged && !timed_out)
 	{
+		if (globals::debug_logging_enabled)
+		{
+			static uint64_t s_last_log = 0;
+			if (now - s_last_log >= 1000ULL)
+			{
+				s_last_log = now;
+				logger::log("[triggerbot] waiting: progress=" + std::to_string(progress) +
+					" elapsed=" + std::to_string((unsigned long long)(now - last_attack_ms)));
+			}
+		}
 		env->DeleteLocalRef(hit_entity);
 		return;
 	}
@@ -516,6 +636,7 @@ void flaway::modules::triggerbot::run()
 	tb_clear_miss_time(env);
 
 	// ATTACK
+	rlog::logf("tb ATTACK jump_only=%d", (int)globals::triggerbot_jump_only);
 	if (!sdk::instance->do_attack() && globals::debug_logging_enabled)
 		logger::log("[triggerbot] doAttack() returned false");
 	last_attack_ms = now;

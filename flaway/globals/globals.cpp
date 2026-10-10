@@ -181,6 +181,19 @@ namespace globals
     float fog_color[4] = {0.55f, 0.65f, 0.75f, 0.35f};
     float fog_strength = 40.0f;
 
+    bool better_minecraft_enabled = false;
+    bool bm_chat_anim = true;
+    bool bm_items_anim = true;
+    bool bm_gui_anim = true;
+    bool bm_zoom_enabled = true;
+    bool bm_f5_enabled = true;
+    int bm_zoom_keybind = 'C';
+    float bm_zoom_divisor = 4.0f;
+    float bm_zoom_speed = 8.0f;
+    bool bm_zoom_scroll = true;
+    bool bm_zoom_sensitivity = true;
+    float bm_f5_speed = 8.0f;
+
     bool hud_watermark_enabled = false;
     bool hud_target_enabled = false;
     bool hud_coords_enabled = false;

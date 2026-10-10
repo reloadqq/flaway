@@ -18,6 +18,11 @@ namespace rlog {
 
 void logf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
+// Close the log file and never reopen it (unhook wipes the file right after,
+// so nothing may recreate it). enable() re-arms the logger for a re-inject.
+void disable();
+void enable();
+
 // Call once at the start of every render frame: advances the frame counter
 // and refills the rate-limit bucket.
 void frame();

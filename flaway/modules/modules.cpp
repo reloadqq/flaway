@@ -29,6 +29,8 @@
 #include "autosprint/autosprint.h"
 #include "fullbright/fullbright.h"
 #include "fog/fog.h"
+#include "better_minecraft/better_minecraft.h"
+#include "chat_command/chat_command.h"
 #include "../../platform/linux/x11_helper.h"
 #include <sdk/minecraft/minecraft.h>
 
@@ -158,6 +160,13 @@ namespace flaway
 			fullbright::run();
 			fog::run();
 			base_finder::run();
+			better_minecraft::run();
+
+			// chat_command needs a retry: ChatScreen may not be loaded yet
+			// when flaway::initialize() first calls init().
+			static bool s_chat_cmd_ready = false;
+			if (!s_chat_cmd_ready)
+				s_chat_cmd_ready = chat_command::init();
 		}
 
 		void check_unhook_all()

@@ -24,6 +24,7 @@ namespace
 		jmethodID set_bounding_box = nullptr;
 		jfieldID bounding_box = nullptr;
 		jfieldID fall_distance = nullptr;
+		bool fall_distance_double = false;
 		jfieldID velocity = nullptr;
 
 		bool init(JNIEnv* env)
@@ -58,8 +59,22 @@ namespace
 			if (env->ExceptionCheck()) env->ExceptionClear();
 			bounding_box = env->GetFieldID(cls, sdk::mappings::get_bounding_box_name, sdk::mappings::get_bounding_box_sig);
 			if (env->ExceptionCheck()) env->ExceptionClear();
-			fall_distance = env->GetFieldID(cls, sdk::mappings::entity_fall_distance_name, sdk::mappings::entity_fall_distance_sig);
+			// 1.21.4 stores fallDistance as float, 1.21.10 as double. A fieldID
+			// obtained with the wrong type descriptor is unusable, so probe both.
+			fall_distance = env->GetFieldID(cls, sdk::mappings::entity_fall_distance_name,
+				sdk::mappings::entity_fall_distance_sig);
 			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (fall_distance)
+			{
+				fall_distance_double = false;
+			}
+			else
+			{
+				fall_distance = env->GetFieldID(cls, sdk::mappings::entity_fall_distance_name,
+					sdk::mappings::entity_fall_distance_sig_legacy);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+				fall_distance_double = fall_distance != nullptr;
+			}
 			velocity = env->GetFieldID(cls, sdk::mappings::entity_velocity_name, sdk::mappings::entity_velocity_sig);
 			if (env->ExceptionCheck()) env->ExceptionClear();
 
@@ -146,7 +161,7 @@ namespace
 		g_jni.set_yaw = nullptr; g_jni.set_pitch = nullptr;
 		g_jni.get_id = nullptr; g_jni.is_on_ground = nullptr;
 		g_jni.set_bounding_box = nullptr; g_jni.bounding_box = nullptr;
-		g_jni.fall_distance = nullptr; g_jni.velocity = nullptr;
+		g_jni.fall_distance = nullptr; g_jni.fall_distance_double = false; g_jni.velocity = nullptr;
 		if (g_status.living_cls) { if (env) env->DeleteGlobalRef(g_status.living_cls); g_status.living_cls = nullptr; }
 		if (g_status.effects_cls) { if (env) env->DeleteGlobalRef(g_status.effects_cls); g_status.effects_cls = nullptr; }
 		g_status.has_status_effect = nullptr; g_status.poison = nullptr;
@@ -301,7 +316,11 @@ double sdk::entity_client::get_fall_distance()
 	if (!env || !entity) return 0.0;
 	if (!g_jni.init(env) || !g_jni.fall_distance) return 0.0;
 
-	jdouble ret = env->GetDoubleField(entity, g_jni.fall_distance);
+	jdouble ret;
+	if (g_jni.fall_distance_double)
+		ret = env->GetDoubleField(entity, g_jni.fall_distance);
+	else
+		ret = static_cast<jdouble>(env->GetFloatField(entity, g_jni.fall_distance));
 	if (env->ExceptionCheck()) env->ExceptionClear();
 	return ret;
 }

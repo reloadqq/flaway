@@ -14,13 +14,14 @@ static bool g_enabled = false;
 // in flaway.cpp can shut the whole thing down once.
 static int jnihook_refcount = 0;
 
-// EntityRenderer.renderLabelIfPresent (method_3571) draws the vanilla
-// nametag above every entity. Suppressing it while our own ESP plates are
-// shown prevents duplicate labels. Verified against the 1.21.10 runtime
-// bytecode: renderName (method_3569) simply casts its first arg and calls
-// this method, so hooking method_3571 alone covers all labels.
-void hkRenderLabel(JNIEnv* env, jobject thiz, jobject text, jobject matrices,
-	jobject vertex_consumers, jobject light)
+// EntityRenderer.renderLabelIfPresent draws the vanilla nametag above every
+// entity. Suppressing it while our own ESP plates are shown prevents duplicate
+// labels. The native must mirror the Java descriptor exactly, and the arity
+// differs between versions, so both are probed at init.
+// 1.21.4: renderLabelIfPresent(EntityRenderState, Text, MatrixStack,
+//         VertexConsumerProvider, int light)
+void hkRenderLabel(JNIEnv* env, jobject thiz, jobject render_state, jobject text,
+	jobject matrices, jobject vertex_consumers, jint light)
 {
 	if (g_enabled)
 	{
@@ -30,7 +31,25 @@ void hkRenderLabel(JNIEnv* env, jobject thiz, jobject text, jobject matrices,
 	if (ORIG_render_label && thiz && g_entity_renderer_class)
 	{
 		env->CallNonvirtualVoidMethod(thiz, g_entity_renderer_class,
-			ORIG_render_label, text, matrices, vertex_consumers, light);
+			ORIG_render_label, render_state, text, matrices, vertex_consumers, light);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+	}
+}
+
+// 1.21.10: renderLabelIfPresent(EntityRenderState, MatrixStack,
+//         OrderedRenderCommandQueue, CameraRenderState)
+void hkRenderLabelLegacy(JNIEnv* env, jobject thiz, jobject render_state,
+	jobject matrices, jobject queue, jobject camera_state)
+{
+	if (g_enabled)
+	{
+		return;
+	}
+
+	if (ORIG_render_label && thiz && g_entity_renderer_class)
+	{
+		env->CallNonvirtualVoidMethod(thiz, g_entity_renderer_class,
+			ORIG_render_label, render_state, matrices, queue, camera_state);
 		if (env->ExceptionCheck()) env->ExceptionClear();
 	}
 }
@@ -75,13 +94,24 @@ bool flaway::modules::nametag_hook::init()
 		sdk::mappings::render_label_sig);
 	if (env->ExceptionCheck()) env->ExceptionClear();
 
+	void* hook = reinterpret_cast<void*>(hkRenderLabel);
+
+	if (!method_id)
+	{
+		method_id = env->GetMethodID(renderer_class,
+			sdk::mappings::render_label_name_legacy,
+			sdk::mappings::render_label_sig_legacy);
+		if (env->ExceptionCheck()) env->ExceptionClear();
+		hook = reinterpret_cast<void*>(hkRenderLabelLegacy);
+	}
+
 	if (!method_id)
 	{
 		env->DeleteLocalRef(renderer_class);
 		return false;
 	}
 
-	jnihook_result_t result = JNIHook_Attach(method_id, reinterpret_cast<void*>(hkRenderLabel), &ORIG_render_label);
+	jnihook_result_t result = JNIHook_Attach(method_id, hook, &ORIG_render_label);
 	if (result != JNIHOOK_OK)
 	{
 		env->DeleteLocalRef(renderer_class);

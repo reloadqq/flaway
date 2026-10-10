@@ -34,6 +34,9 @@ namespace
 	constexpr float k_hold_pitch = 13.0f;
 	constexpr float k_hold_yaw = 8.0f;
 	constexpr uint64_t k_scan_period_ms = 50;
+	constexpr uint64_t k_rescan_period_ms = 8;
+	constexpr float k_ramp = 1.0f;
+	constexpr float k_frame_sec = 0.05f;
 
 	struct jni_cache
 	{
@@ -79,6 +82,8 @@ namespace
 	int g_target_id = 0;
 	bool g_aim_valid = false;
 	v3 g_aim;
+	float g_vel_yaw = 0.0f;
+	float g_vel_pitch = 0.0f;
 	uint64_t g_last_scan = 0;
 	uint64_t g_last_frame = 0;
 
@@ -655,21 +660,16 @@ namespace
 		v3 look = look_dir(yaw, pitch);
 		double best_angle = 1e30;
 		jobject best = nullptr;
+		double half_fov = (double)globals::aimtarget_fov * 0.5;
+		double pre_reach = through_walls ? k_select_reach + 3.0 : k_select_reach;
+		double pre_reach2 = pre_reach * pre_reach;
 
 		sdk::world_client wc(world);
 		std::vector<jobject> entities = wc.get_entities();
 		for (jobject e : entities)
 		{
 			if (!e) continue;
-			bool keep = env->IsInstanceOf(e, g.c_living) &&
-				is_valid_target(env, e, player, eye);
-			if (keep)
-			{
-				double d2 = 0.0;
-				keep = eye_box_dist2(env, e, eye, &d2) &&
-					(through_walls || d2 <= k_select_reach * k_select_reach);
-			}
-			if (!keep) { env->DeleteLocalRef(e); continue; }
+			if (!env->IsInstanceOf(e, g.c_living)) { env->DeleteLocalRef(e); continue; }
 
 			jobject box = get_box(env, e);
 			double b[6];
@@ -677,27 +677,25 @@ namespace
 			if (box) env->DeleteLocalRef(box);
 			if (!got) { env->DeleteLocalRef(e); continue; }
 
+			double cx = clampd(eye.x, b[0], b[3]);
+			double cy = clampd(eye.y, b[1], b[4]);
+			double cz = clampd(eye.z, b[2], b[5]);
+			double dx = cx - eye.x, dy = cy - eye.y, dz = cz - eye.z;
+			if (dx * dx + dy * dy + dz * dz > pre_reach2) { env->DeleteLocalRef(e); continue; }
+
 			v3 center = { (b[0] + b[3]) * 0.5, (b[1] + b[4]) * 0.5, (b[2] + b[5]) * 0.5 };
-			double dx = center.x - eye.x, dy = center.y - eye.y, dz = center.z - eye.z;
+			dx = center.x - eye.x; dy = center.y - eye.y; dz = center.z - eye.z;
 			double len = std::sqrt(dx * dx + dy * dy + dz * dz);
 			if (len < 1e-9) { env->DeleteLocalRef(e); continue; }
 			double dot = (look.x * dx + look.y * dy + look.z * dz) / len;
-			double angle = std::acos(clampd(dot, -1.0, 1.0));
-			if (angle * 57.2957795 > (double)globals::aimtarget_fov * 0.5)
-			{
-				env->DeleteLocalRef(e);
-				continue;
-			}
-			if (angle < best_angle)
-			{
-				if (best) env->DeleteLocalRef(best);
-				best = e;
-				best_angle = angle;
-			}
-			else
-			{
-				env->DeleteLocalRef(e);
-			}
+			double angle = std::acos(clampd(dot, -1.0, 1.0)) * 57.2957795;
+			if (angle > half_fov || angle >= best_angle) { env->DeleteLocalRef(e); continue; }
+
+			if (!is_valid_target(env, e, player, eye)) { env->DeleteLocalRef(e); continue; }
+
+			if (best) env->DeleteLocalRef(best);
+			best = e;
+			best_angle = angle;
 		}
 		return best;
 	}
@@ -708,6 +706,8 @@ namespace
 		g_target = nullptr;
 		g_target_id = 0;
 		g_aim_valid = false;
+		g_vel_yaw = 0.0f;
+		g_vel_pitch = 0.0f;
 	}
 
 	void acquire_target(JNIEnv* env, jobject world, jobject player, const v3& eye,
@@ -793,16 +793,44 @@ namespace
 
 		float eraw = clampf((float)(std::hypot(d_yaw, d_pitch) / 2.0), 0.0f, 1.0f);
 		float ease = eraw * eraw * (3.0f - 2.0f * eraw);
-		float speed = globals::aimtarget_threshold * k_speed_mult * dt * ease;
-		if (speed <= 0.0f) return;
 		float denom = std::max(std::fabs(d_yaw), std::fabs(d_pitch) * 2.0f);
-		if (denom <= 0.0f) return;
-		float step = std::min(1.0f, speed / denom);
+		float accel = globals::aimtarget_threshold * k_speed_mult * (1.0f / k_frame_sec) * k_ramp;
+		float s_limit = globals::aimtarget_threshold * k_speed_mult / k_frame_sec;
+		float s_des = s_limit * ease;
+		float s_brake = std::sqrt(2.0f * accel * denom);
+		float s_target = std::min(s_des, s_brake);
+
+		float dir_y = denom > 1e-6f ? d_yaw / denom : 0.0f;
+		float dir_p = denom > 1e-6f ? d_pitch / denom : 0.0f;
+
+		float want_y = dir_y * s_target;
+		float want_p = dir_p * s_target;
+		float max_dv = accel * (dt * k_frame_sec);
+		float dv_y = want_y - g_vel_yaw;
+		float dv_p = want_p - g_vel_pitch;
+		float dvm = std::hypot(dv_y, dv_p);
+		if (dvm > max_dv && dvm > 1e-9f)
+		{
+			float k = max_dv / dvm;
+			dv_y *= k;
+			dv_p *= k;
+		}
+		g_vel_yaw += dv_y;
+		g_vel_pitch += dv_p;
+
+		float step_y = g_vel_yaw * (dt * k_frame_sec);
+		float step_p = g_vel_pitch * (dt * k_frame_sec);
+		if (std::fabs(step_y) > std::fabs(d_yaw)) { step_y = d_yaw; g_vel_yaw = 0.0f; }
+		if (std::fabs(step_p) > std::fabs(d_pitch)) { step_p = d_pitch; g_vel_pitch = 0.0f; }
+		if (denom <= 1e-6f && dvm <= 1e-9f && std::fabs(step_y) <= 1e-4f && std::fabs(step_p) <= 1e-4f)
+			return;
+
+		float next_pitch = clampf(cur_pitch + step_p, -90.0f, 90.0f);
+		if (next_pitch != cur_pitch + step_p) g_vel_pitch = 0.0f;
 
 		sdk::entity_client ec(player);
-		ec.set_yaw(cur_yaw + d_yaw * step);
-		if (d_pitch != 0.0f)
-			ec.set_pitch(clampf(cur_pitch + d_pitch * step, -90.0f, 90.0f));
+		ec.set_yaw(cur_yaw + step_y);
+		ec.set_pitch(next_pitch);
 	}
 }
 
@@ -847,7 +875,8 @@ void flaway::modules::aimtarget::run()
 	if (g_target && !is_valid_target(env, g_target, player, eye))
 		reset_target(env);
 
-	if (now - g_last_scan >= k_scan_period_ms)
+	uint64_t scan_period = g_target ? k_scan_period_ms : k_rescan_period_ms;
+	if (now - g_last_scan >= scan_period)
 	{
 		g_last_scan = now;
 		acquire_target(env, world, player, eye, yaw, pitch, through_walls);
@@ -883,6 +912,8 @@ void flaway::modules::aimtarget::cleanup()
 	g_world = nullptr;
 	g_target_id = 0;
 	g_aim_valid = false;
+	g_vel_yaw = 0.0f;
+	g_vel_pitch = 0.0f;
 	g_last_scan = 0;
 	g = jni_cache{};
 }

@@ -30,6 +30,7 @@
 #include "classfile.hpp"
 #include "uuid.hpp"
 #include "flaway/utils/no_log.h"
+#include "flaway/utils/rlog.h"
 
 typedef struct jnihook_t {
         JavaVM   *jvm;
@@ -177,31 +178,23 @@ void JNICALL JNIHook_ClassFileLoadHook(jvmtiEnv *jvmti_env,
 
         // Don't do anything for unhooked classes
         if (g_hooks.find(class_name) == g_hooks.end() || g_hooks[class_name].size() == 0) {
-                fprintf(stderr, "[JNIHOOK] ClassFileLoadHook: class '%s' not in hooks, skipping\n", class_name.c_str());
-                fflush(stderr);
                 return;
         }
 
-        fprintf(stderr, "[JNIHOOK] ClassFileLoadHook: caching class '%s'\n", class_name.c_str());
-        fflush(stderr);
+        rlog::logf("[JNIHOOK] ClassFileLoadHook: caching class '%s' len=%d", class_name.c_str(), (int)class_data_len);
 
         // Cache parsed ClassFile if it's not cached yet
         if (g_class_file_cache.find(class_name) == g_class_file_cache.end()) {
                 auto cf = ClassFile::load(class_data);
                 if (!cf) {
-                        fprintf(stderr, "[JNIHOOK] ClassFileLoadHook: ClassFile::load FAILED for '%s'\n", class_name.c_str());
-                        fflush(stderr);
+                        rlog::logf("[JNIHOOK] ClassFile::load FAILED for '%s'", class_name.c_str());
                         return;
                 }
 
-                fprintf(stderr, "[JNIHOOK] ClassFileLoadHook: ClassFile::load OK for '%s' (%zu methods)\n",
+                rlog::logf("[JNIHOOK] ClassFile::load OK for '%s' (%zu methods)",
                         class_name.c_str(), cf->get_methods().size());
-                fflush(stderr);
 
                 g_class_file_cache[class_name] = std::move(cf);
-        } else {
-                fprintf(stderr, "[JNIHOOK] ClassFileLoadHook: class '%s' already cached\n", class_name.c_str());
-                fflush(stderr);
         }
 
         return;
@@ -220,8 +213,7 @@ ReapplyClass(jclass clazz, std::string clazz_name)
         jvmtiClassDefinition class_definition;
 
         if (g_class_file_cache.find(clazz_name) == g_class_file_cache.end()) {
-                fprintf(stderr, "[JNIHOOK] ReapplyClass: class '%s' not in cache!\n", clazz_name.c_str());
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] ReapplyClass: class '%s' not in cache!", clazz_name.c_str());
                 return JNIHOOK_ERR_CLASS_FILE_CACHE;
         }
 
@@ -290,13 +282,11 @@ ReapplyClass(jclass clazz, std::string clazz_name)
         class_definition.class_bytes = cf_bytes.data();
         jvmtiError redef_err = g_jnihook->jvmti->RedefineClasses(1, &class_definition);
         if (redef_err != JVMTI_ERROR_NONE) {
-                fprintf(stderr, "[JNIHOOK] ReapplyClass: RedefineClasses FAILED error=%d\n", (int)redef_err);
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] RedefineClasses FAILED for %s error=%d", clazz_name.c_str(), (int)redef_err);
                 return JNIHOOK_ERR_JVMTI_OPERATION;
         }
 
-        fprintf(stderr, "[JNIHOOK] ReapplyClass: OK\n");
-        fflush(stderr);
+        rlog::logf("[JNIHOOK] ReapplyClass OK for %s", clazz_name.c_str());
 
         return JNIHOOK_OK;
 }
@@ -393,28 +383,24 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
         }
 
         if (g_jnihook->jvmti->GetMethodDeclaringClass(method, &clazz) != JVMTI_ERROR_NONE) {
-                fprintf(stderr, "[JNIHOOK] JNIHook_Attach: GetMethodDeclaringClass FAILED\n");
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] GetMethodDeclaringClass FAILED");
                 return JNIHOOK_ERR_JVMTI_OPERATION;
         }
 
         clazz_name = get_class_name(env, clazz);
         if (clazz_name.length() == 0) {
-                fprintf(stderr, "[JNIHOOK] JNIHook_Attach: get_class_name FAILED\n");
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] get_class_name FAILED");
                 return JNIHOOK_ERR_JNI_OPERATION;
         }
 
         auto method_info = get_method_info(g_jnihook->jvmti, method);
         if (!method_info) {
-                fprintf(stderr, "[JNIHOOK] JNIHook_Attach: get_method_info FAILED\n");
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] get_method_info FAILED");
                 return JNIHOOK_ERR_JVMTI_OPERATION;
         }
 
-        fprintf(stderr, "[JNIHOOK] JNIHook_Attach: class=%s method=%s sig=%s\n",
+        rlog::logf("[JNIHOOK] class=%s method=%s sig=%s",
                 clazz_name.c_str(), method_info->name.c_str(), method_info->signature.c_str());
-        fflush(stderr);
 
         hook_info.method_info = *method_info;
         hook_info.native_hook_method = native_hook_method;
@@ -439,8 +425,7 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
                 auto result = g_jnihook->jvmti->RetransformClasses(1, &clazz);
                 g_hooks[clazz_name].pop_back();
 
-                fprintf(stderr, "[JNIHOOK] JNIHook_Attach: RetransformClasses result=%d\n", (int)result);
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] RetransformClasses result=%d", (int)result);
 
                 // NOTE: We disable the ClassFileLoadHook here because it breaks
                 //       any `env->DefineClass()` calls. Also, it's not necessary
@@ -455,20 +440,17 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
                 }
 
                 if (result != JVMTI_ERROR_NONE) {
-                        fprintf(stderr, "[JNIHOOK] JNIHook_Attach: RetransformClasses failed with %d\n", (int)result);
-                        fflush(stderr);
+                        rlog::logf("[JNIHOOK] RetransformClasses failed with %d", (int)result);
                         return JNIHOOK_ERR_CLASS_FILE_CACHE;
                 }
 
                 if (g_class_file_cache.find(clazz_name) == g_class_file_cache.end()) {
-                        fprintf(stderr, "[JNIHOOK] JNIHook_Attach: class '%s' still not cached after retransform!\n",
+                        rlog::logf("[JNIHOOK] class '%s' still not cached after retransform!",
                                 clazz_name.c_str());
-                        fflush(stderr);
                         return JNIHOOK_ERR_CLASS_FILE_CACHE;
                 }
 
-                fprintf(stderr, "[JNIHOOK] JNIHook_Attach: class '%s' cached OK\n", clazz_name.c_str());
-                fflush(stderr);
+                rlog::logf("[JNIHOOK] class '%s' cached OK", clazz_name.c_str());
         }
 
         // Make copy of the class prior to hooking it
@@ -539,7 +521,11 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
                                 memcpy(&cpi.bytes.data()[sizeof(ci)], class_copy_name.c_str(), ci.length);
 
                                 cf.set_constant_pool_item(class_ci->name_index, cpi);
-                                break; // TODO: Assure that the ClassName can only happen once per ClassFile!
+                                // NO break: large classes (Screen, 110 methods)
+                                // have multiple CONSTANT_Class entries pointing
+                                // to the same Utf8 name. Patching only one leaves
+                                // the copy inconsistent → DefineClass succeeds but
+                                // the class is erroneous → GetMethodID fails.
                         }
                 }
 
@@ -614,15 +600,21 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
 
                 auto class_data = cf.bytes();
 
-                if (g_jnihook->jvmti->GetClassLoader(clazz, &class_loader) != JVMTI_ERROR_NONE)
+                if (g_jnihook->jvmti->GetClassLoader(clazz, &class_loader) != JVMTI_ERROR_NONE) {
+                        rlog::logf("[JNIHOOK] GetClassLoader FAILED for %s", clazz_name.c_str());
                         return JNIHOOK_ERR_JVMTI_OPERATION;
+                }
 
                 class_copy = env->DefineClass(NULL, class_loader,
                                               reinterpret_cast<const jbyte *>(class_data.data()),
                                               class_data.size());
 
-                if (!class_copy)
+                if (!class_copy) {
+                        jthrowable exc = env->ExceptionOccurred();
+                        env->ExceptionClear();
+                        rlog::logf("[JNIHOOK] DefineClass FAILED for %s (exc=%p)", clazz_name.c_str(), (void*)exc);
                         return JNIHOOK_ERR_JNI_OPERATION;
+                }
 
                 // DefineClass returns a LOCAL reference valid only until the
                 // current native method returns. The class is needed later (in
@@ -653,7 +645,57 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
                 }
 
                 if (!orig || env->ExceptionOccurred()) {
+                        jthrowable exc = env->ExceptionOccurred();
                         env->ExceptionClear();
+                        // Log the actual Java exception class+message so we
+                        // can diagnose why the copied class is erroneous.
+                        if (exc) {
+                                jclass exc_cls = env->GetObjectClass(exc);
+                                jmethodID get_cls_name = nullptr;
+                                if (exc_cls) {
+                                        jclass class_cls = env->FindClass("java/lang/Class");
+                                        if (class_cls) {
+                                                get_cls_name = env->GetMethodID(class_cls, "getName", "()Ljava/lang/String;");
+                                                env->DeleteLocalRef(class_cls);
+                                        }
+                                }
+                                jclass throwable_cls = env->FindClass("java/lang/Throwable");
+                                jmethodID get_msg = nullptr;
+                                if (throwable_cls) {
+                                        get_msg = env->GetMethodID(throwable_cls, "getMessage", "()Ljava/lang/String;");
+                                        env->DeleteLocalRef(throwable_cls);
+                                }
+                                const char* exc_cls_name = nullptr;
+                                const char* exc_msg = nullptr;
+                                jstring j_cls_name = nullptr;
+                                jstring j_msg = nullptr;
+                                if (exc_cls && get_cls_name) {
+                                        j_cls_name = (jstring)env->CallObjectMethod(exc_cls, get_cls_name);
+                                        if (!env->ExceptionCheck() && j_cls_name)
+                                                exc_cls_name = env->GetStringUTFChars(j_cls_name, nullptr);
+                                        else env->ExceptionClear();
+                                }
+                                if (exc && get_msg) {
+                                        j_msg = (jstring)env->CallObjectMethod(exc, get_msg);
+                                        if (!env->ExceptionCheck() && j_msg)
+                                                exc_msg = env->GetStringUTFChars(j_msg, nullptr);
+                                        else env->ExceptionClear();
+                                }
+                                rlog::logf("[JNIHOOK] GetMethodID on orig FAILED %s.%s%s exc=%s: %s",
+                                        clazz_name.c_str(), method_info->name.c_str(),
+                                        method_info->signature.c_str(),
+                                        exc_cls_name ? exc_cls_name : "?",
+                                        exc_msg ? exc_msg : "?");
+                                if (exc_cls_name) env->ReleaseStringUTFChars(j_cls_name, exc_cls_name);
+                                if (exc_msg) env->ReleaseStringUTFChars(j_msg, exc_msg);
+                                if (j_cls_name) env->DeleteLocalRef(j_cls_name);
+                                if (j_msg) env->DeleteLocalRef(j_msg);
+                                if (exc_cls) env->DeleteLocalRef(exc_cls);
+                        } else {
+                                rlog::logf("[JNIHOOK] GetMethodID on orig FAILED %s.%s%s (no exception)",
+                                        clazz_name.c_str(), method_info->name.c_str(),
+                                        method_info->signature.c_str());
+                        }
                         return JNIHOOK_ERR_JAVA_EXCEPTION;
                 }
 
@@ -686,6 +728,7 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
         g_hooks[clazz_name].push_back(hook_info);
         if (ret = ReapplyClass(clazz, clazz_name); ret != JNIHOOK_OK) {
                 g_hooks[clazz_name].pop_back();
+                rlog::logf("[JNIHOOK] ReapplyClass FAILED for %s rc=%d", clazz_name.c_str(), (int)ret);
                 goto RESUME_THREADS;
         }
 
@@ -696,8 +739,13 @@ JNIHook_Attach(jmethodID method, void *native_hook_method, jmethodID *original_m
         native_method.fnPtr = native_hook_method;
 
         if (env->RegisterNatives(clazz, &native_method, 1) < 0) {
+                jthrowable exc = env->ExceptionOccurred();
+                env->ExceptionClear();
                 g_hooks[clazz_name].pop_back();
                 ReapplyClass(clazz, clazz_name); // Attempt to restore class to previous state
+                rlog::logf("[JNIHOOK] RegisterNatives FAILED for %s.%s%s (exc=%p)",
+                        clazz_name.c_str(), method_info->name.c_str(),
+                        method_info->signature.c_str(), (void*)exc);
                 ret = JNIHOOK_ERR_JNI_OPERATION;
                 goto RESUME_THREADS;
         }

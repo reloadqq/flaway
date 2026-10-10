@@ -20,9 +20,11 @@ flaway/flaway.o: flaway/flaway.cpp flaway/utils/no_log.h flaway/flaway.h \
  flaway/modules/autosprint/autosprint.h flaway/modules/esp/esp.h \
  sdk/minecraft/util/box.h flaway/modules/aimtarget/aimtarget.h \
  flaway/modules/friend_manager/friend_manager.h \
- flaway/modules/chat_command/chat_command.h \
+ flaway/modules/chat_command/chat_command.h flaway/modules/fog/fog.h \
+ flaway/modules/better_minecraft/better_minecraft.h \
  utils/jnihook-master/include/jnihook.h flaway/modules/modules.h \
- flaway/utils/discord_rpc.h
+ flaway/utils/discord_rpc.h flaway/utils/chat_notify.h \
+ flaway/utils/artifacts.h
 flaway/utils/no_log.h:
 flaway/flaway.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
@@ -60,6 +62,10 @@ sdk/minecraft/util/box.h:
 flaway/modules/aimtarget/aimtarget.h:
 flaway/modules/friend_manager/friend_manager.h:
 flaway/modules/chat_command/chat_command.h:
+flaway/modules/fog/fog.h:
+flaway/modules/better_minecraft/better_minecraft.h:
 utils/jnihook-master/include/jnihook.h:
 flaway/modules/modules.h:
 flaway/utils/discord_rpc.h:
+flaway/utils/chat_notify.h:
+flaway/utils/artifacts.h:

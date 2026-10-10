@@ -32,7 +32,8 @@ flaway/modules/modules.o: flaway/modules/modules.cpp \
  flaway/modules/chest_stealer/chest_stealer.h \
  flaway/modules/autosprint/autosprint.h \
  flaway/modules/fullbright/fullbright.h flaway/modules/fog/fog.h \
- sdk/minecraft/minecraft.h
+ flaway/modules/better_minecraft/better_minecraft.h \
+ flaway/modules/chat_command/chat_command.h sdk/minecraft/minecraft.h
 flaway/utils/no_log.h:
 flaway/modules/modules.h:
 flaway/modules/../flaway.h:
@@ -78,4 +79,6 @@ flaway/modules/chest_stealer/chest_stealer.h:
 flaway/modules/autosprint/autosprint.h:
 flaway/modules/fullbright/fullbright.h:
 flaway/modules/fog/fog.h:
+flaway/modules/better_minecraft/better_minecraft.h:
+flaway/modules/chat_command/chat_command.h:
 sdk/minecraft/minecraft.h:

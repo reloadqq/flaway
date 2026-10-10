@@ -72,6 +72,11 @@ namespace x11_helper {
         return data;
     }
 
+    float peek_wheel() {
+        std::lock_guard<std::mutex> lock(g_input_mutex);
+        return g_input.wheel;
+    }
+
     int poll_new_key_press() {
         std::lock_guard<std::mutex> lock(g_input_mutex);
         if (g_key_queue.empty()) return 0;

@@ -9,6 +9,7 @@ namespace flaway
 			void run();
 			void draw();
 			void cleanup();
+			void shutdown();
 		}
 	}
 }

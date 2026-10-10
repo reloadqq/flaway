@@ -27,6 +27,9 @@ namespace x11_helper {
     void init();
     void shutdown();
     InputData poll_input();
+    // Non-destructive wheel read (poll_input() clears the accumulator): lets a
+    // consumer observe the scroll without racing the GUI's feed_input_to_imgui.
+    float peek_wheel();
     int poll_new_key_press();
     bool is_key_just_pressed(int vk);
     bool is_key_held(int vk);

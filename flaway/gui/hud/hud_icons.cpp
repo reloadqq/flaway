@@ -32,6 +32,7 @@ typedef void (*PFN_DELTEX)(int, const unsigned*);
 typedef void (*PFN_PIXELSTORE)(unsigned, int);
 typedef void (*PFN_GETINTEGERV)(unsigned, int*);
 typedef void (*PFN_BINDBUFFER)(unsigned, unsigned);
+typedef unsigned (*PFN_GETERROR)(void);
 
 PFN_GENTEX pGenTextures = nullptr;
 PFN_BINDTEX pBindTexture = nullptr;
@@ -98,6 +99,18 @@ unsigned upload_rgba(const unsigned char* pixels, int w, int h) {
     pGetIntegerv(kUnpackAlignment, &saved[3]);
     pGetIntegerv(kTextureBinding2D, &saved[4]);
     pGetIntegerv(kUnpackBufferBinding, &saved[5]);
+    // Mesa/Intel returns GL_INVALID_ENUM for GL_PIXEL_UNPACK_BUFFER_BINDING —
+    // clear the error so the game's GL debug callback doesn't spam the log.
+    {
+        static PFN_GETERROR pGetError = nullptr;
+        static bool s_ge_tried = false;
+        if (!s_ge_tried)
+        {
+            s_ge_tried = true;
+            pGetError = (PFN_GETERROR)dlsym(RTLD_DEFAULT, "glGetError");
+        }
+        if (pGetError) while (pGetError() != 0) {}
+    }
     unsigned tex = 0;
     pGenTextures(1, &tex);
     if (!tex) return 0;

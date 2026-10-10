@@ -779,9 +779,23 @@ namespace
 			g_jni.block_get_translation_key = env->GetMethodID(g_jni.block_class,
 				sdk::mappings::block_get_translation_key_name, sdk::mappings::block_get_translation_key_sig);
 			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (!g_jni.block_get_translation_key)
+			{
+				g_jni.block_get_translation_key = env->GetMethodID(g_jni.block_class,
+					sdk::mappings::block_get_translation_key_name_legacy,
+					sdk::mappings::block_get_translation_key_sig);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+			}
 			g_jni.block_translation_key = env->GetFieldID(g_jni.block_class,
 				sdk::mappings::block_translation_key_field, sdk::mappings::block_translation_key_sig);
 			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (!g_jni.block_translation_key)
+			{
+				g_jni.block_translation_key = env->GetFieldID(g_jni.block_class,
+					sdk::mappings::block_translation_key_field_legacy,
+					sdk::mappings::block_translation_key_sig);
+				if (env->ExceptionCheck()) env->ExceptionClear();
+			}
 		}
 
 		// click-mode caches

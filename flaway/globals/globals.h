@@ -235,6 +235,20 @@ namespace globals
     extern float fog_color[4];
     extern float fog_strength;    // 0..100
 
+    // Better Minecraft (vanilla chat/GUI/inventory animations, zoom, smooth F5)
+    extern bool better_minecraft_enabled;  // master switch
+    extern bool bm_chat_anim;              // ChatAnimation on the vanilla chat
+    extern bool bm_items_anim;             // Tiny Item Animations (inventory)
+    extern bool bm_gui_anim;               // SmoothGUI (screen open animation)
+    extern bool bm_zoom_enabled;           // hold-to-zoom (FOV)
+    extern bool bm_f5_enabled;             // animated third-person toggle
+    extern int bm_zoom_keybind;            // X11 VK, hold to zoom ('C')
+    extern float bm_zoom_divisor;          // 2..20
+    extern float bm_zoom_speed;            // 1..20
+    extern bool bm_zoom_scroll;            // wheel adjusts the zoom while held
+    extern bool bm_zoom_sensitivity;       // scale mouse sensitivity while zoomed
+    extern float bm_f5_speed;              // 1..20
+
     // HUD
     extern bool hud_watermark_enabled;
     extern bool hud_target_enabled;

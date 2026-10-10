@@ -22,6 +22,22 @@ void add(const std::string& line)
 	if (line.empty()) return;
 	if (!flaway::instance || !sdk::instance) return;
 
+	// Text.literal() does NOT parse § color codes — they would show as
+	// literal "§a" in chat. Strip every §X pair before building the Text.
+	std::string clean;
+	clean.reserve(line.size());
+	for (size_t i = 0; i < line.size(); i++)
+	{
+		if (line[i] == '\xC2' && i + 1 < line.size() && line[i + 1] == '\xA7')
+		{
+			i++; // skip the §
+			if (i + 1 < line.size()) i++; // skip the code char
+			continue;
+		}
+		clean += line[i];
+	}
+	if (clean.empty()) return;
+
 	JNIEnv* env = flaway::instance->get_env();
 	if (!env) return;
 
@@ -106,6 +122,138 @@ void add(const std::string& line)
 	}
 	if (text) env->DeleteLocalRef(text);
 	env->DeleteLocalRef(chat);
+}
+
+void clear_flaway_messages()
+{
+	if (!flaway::instance || !sdk::instance) return;
+	JNIEnv* env = flaway::instance->get_env();
+	if (!env) return;
+
+	jobject mc = sdk::instance->get_minecraft();
+	if (!mc) return;
+
+	jclass mc_cls = sdk::classloader::find_class(env, sdk::mappings::minecraftclass_sig);
+	if (!mc_cls) { env->DeleteLocalRef(mc); return; }
+
+	jfieldID hud_fid = env->GetFieldID(mc_cls,
+		sdk::mappings::minecraftclient_ingamehud_field,
+		sdk::mappings::minecraftclient_ingamehud_sig);
+	if (env->ExceptionCheck()) env->ExceptionClear();
+	env->DeleteLocalRef(mc_cls);
+	if (!hud_fid) { env->DeleteLocalRef(mc); return; }
+
+	jobject hud = env->GetObjectField(mc, hud_fid);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); hud = nullptr; }
+	env->DeleteLocalRef(mc);
+	if (!hud) return;
+
+	jclass hud_cls = sdk::classloader::find_class(env, sdk::mappings::ingamehud_class_sig);
+	jobject chat = nullptr;
+	if (hud_cls)
+	{
+		jmethodID get_chat_mid = env->GetMethodID(hud_cls,
+			sdk::mappings::ingamehud_get_chat_hud_name,
+			sdk::mappings::ingamehud_get_chat_hud_sig);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); get_chat_mid = nullptr; }
+		if (get_chat_mid)
+		{
+			chat = env->CallObjectMethod(hud, get_chat_mid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); chat = nullptr; }
+		}
+		env->DeleteLocalRef(hud_cls);
+	}
+	env->DeleteLocalRef(hud);
+	if (!chat) return;
+
+	jclass chat_cls = sdk::classloader::find_class(env, sdk::mappings::chat_hud_class_sig);
+	if (!chat_cls) { env->DeleteLocalRef(chat); return; }
+
+	jfieldID msgs_fid = env->GetFieldID(chat_cls,
+		sdk::mappings::chat_hud_messages_name,
+		sdk::mappings::chat_hud_messages_sig);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); msgs_fid = nullptr; }
+	env->DeleteLocalRef(chat_cls);
+	if (!msgs_fid) { env->DeleteLocalRef(chat); return; }
+
+	jobject msgs = env->GetObjectField(chat, msgs_fid);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); msgs = nullptr; }
+	env->DeleteLocalRef(chat);
+	if (!msgs) return;
+
+	jclass list_cls = env->GetObjectClass(msgs);
+	if (!list_cls) { env->DeleteLocalRef(msgs); return; }
+
+	jmethodID size_mid = env->GetMethodID(list_cls, "size", "()I");
+	jmethodID get_mid = env->GetMethodID(list_cls, "get", "(I)Ljava/lang/Object;");
+	jmethodID remove_mid = env->GetMethodID(list_cls, "remove", "(I)Ljava/lang/Object;");
+	if (env->ExceptionCheck()) { env->ExceptionClear(); size_mid = get_mid = remove_mid = nullptr; }
+	env->DeleteLocalRef(list_cls);
+	if (!size_mid || !get_mid || !remove_mid) { env->DeleteLocalRef(msgs); return; }
+
+	// ChatHudLine.content is a Text; getString() renders it to a C string.
+	jclass line_cls = sdk::classloader::find_class(env, sdk::mappings::chat_hud_line_class_sig);
+	jfieldID content_fid = nullptr;
+	if (line_cls)
+	{
+		content_fid = env->GetFieldID(line_cls,
+			sdk::mappings::chat_hud_line_content_name, "Lnet/minecraft/class_2561;");
+		if (env->ExceptionCheck()) { env->ExceptionClear(); content_fid = nullptr; }
+		env->DeleteLocalRef(line_cls);
+	}
+	jclass text_cls = sdk::classloader::find_class(env, sdk::mappings::text_class_sig);
+	jmethodID str_mid = nullptr;
+	if (text_cls)
+	{
+		str_mid = env->GetMethodID(text_cls,
+			sdk::mappings::text_get_string_name,
+			sdk::mappings::text_get_string_sig);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); str_mid = nullptr; }
+		env->DeleteLocalRef(text_cls);
+	}
+
+	// Iterate backwards so remove() indices stay valid.
+	jint n = env->CallIntMethod(msgs, size_mid);
+	if (env->ExceptionCheck()) { env->ExceptionClear(); n = 0; }
+	for (jint i = n - 1; i >= 0; i--)
+	{
+		jobject line = env->CallObjectMethod(msgs, get_mid, i);
+		if (env->ExceptionCheck()) { env->ExceptionClear(); line = nullptr; }
+		if (!line) continue;
+
+		bool match = false;
+		if (content_fid && str_mid)
+		{
+			jobject content = env->GetObjectField(line, content_fid);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); content = nullptr; }
+			if (content)
+			{
+				jstring s = (jstring)env->CallObjectMethod(content, str_mid, 0x7FFFFFFF);
+				if (env->ExceptionCheck()) { env->ExceptionClear(); s = nullptr; }
+				if (s)
+				{
+					const char* utf = env->GetStringUTFChars(s, nullptr);
+					if (utf)
+					{
+						if (strstr(utf, "[flaway]") || strstr(utf, "[Flway]"))
+							match = true;
+						env->ReleaseStringUTFChars(s, utf);
+					}
+					env->DeleteLocalRef(s);
+				}
+				env->DeleteLocalRef(content);
+			}
+		}
+		env->DeleteLocalRef(line);
+
+		if (match)
+		{
+			jobject removed = env->CallObjectMethod(msgs, remove_mid, i);
+			if (env->ExceptionCheck()) env->ExceptionClear();
+			if (removed) env->DeleteLocalRef(removed);
+		}
+	}
+	env->DeleteLocalRef(msgs);
 }
 
 bool append_file(const std::string& file_name, const std::string& line)

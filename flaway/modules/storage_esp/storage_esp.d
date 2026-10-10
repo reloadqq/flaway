@@ -15,7 +15,8 @@ flaway/modules/storage_esp/storage_esp.o: \
  flaway/modules/storage_esp/../../gui/GUI.h sdk/minecraft/minecraft.h \
  sdk/minecraft/world/world.h sdk/minecraft/entity/entity.h \
  sdk/classloader.h sdk/mappings/mappings.hpp sdk/projection.h \
- flaway/modules/storage_esp/../../utils/logger.h
+ flaway/modules/storage_esp/../../utils/logger.h \
+ flaway/modules/storage_esp/../../utils/rlog.h
 flaway/utils/no_log.h:
 flaway/modules/storage_esp/storage_esp.h:
 sdk/includes.h:
@@ -43,3 +44,4 @@ sdk/classloader.h:
 sdk/mappings/mappings.hpp:
 sdk/projection.h:
 flaway/modules/storage_esp/../../utils/logger.h:
+flaway/modules/storage_esp/../../utils/rlog.h:

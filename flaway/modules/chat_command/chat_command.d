@@ -4,6 +4,8 @@ flaway/modules/chat_command/chat_command.o: \
  flaway/modules/chat_command/../../flaway.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h \
  /usr/lib/jvm/java-21-openjdk-amd64/include/linux/jni_md.h \
+ flaway/modules/chat_command/../../utils/rlog.h \
+ flaway/modules/chat_command/../../utils/chat_notify.h \
  flaway/modules/chat_command/../friend_manager/friend_manager.h \
  sdk/mappings/mappings.hpp sdk/classloader.h sdk/includes.h \
  third_party/vulkan_headers/GL/gl.h third_party/vulkan_headers/GL/glx.h \
@@ -18,6 +20,8 @@ flaway/modules/chat_command/chat_command.h:
 flaway/modules/chat_command/../../flaway.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/jni.h:
 /usr/lib/jvm/java-21-openjdk-amd64/include/linux/jni_md.h:
+flaway/modules/chat_command/../../utils/rlog.h:
+flaway/modules/chat_command/../../utils/chat_notify.h:
 flaway/modules/chat_command/../friend_manager/friend_manager.h:
 sdk/mappings/mappings.hpp:
 sdk/classloader.h:

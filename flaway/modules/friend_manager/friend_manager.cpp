@@ -97,6 +97,21 @@ namespace flaway
             for (const auto& f : s_friends)
             {
                 if (f == nick) return true;
+                // ESP caches clean_name() which turns '_' into ' ' — also try
+                // the underscore-stripped form so "VANOOOO_777" still matches
+                // when the caller passes "VANOOOO 777".
+                if (f.find('_') != std::string::npos)
+                {
+                    std::string f2 = f;
+                    for (char& c : f2) if (c == '_') c = ' ';
+                    if (f2 == nick) return true;
+                }
+                if (nick.find('_') != std::string::npos)
+                {
+                    std::string n2 = nick;
+                    for (char& c : n2) if (c == '_') c = ' ';
+                    if (f == n2) return true;
+                }
             }
             return false;
         }
